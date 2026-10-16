@@ -1,12 +1,12 @@
 import { useState } from 'react'
-import { ArrowDownWideNarrow, ArrowUpRight, Building2, CircleAlert, Eye, EyeOff, LoaderCircle, MapPin, Search, Sparkles, Users } from 'lucide-react'
+import { ArrowDownWideNarrow, ArrowLeft, ArrowUpRight, AtSign, Building2, CircleAlert, Eye, EyeOff, LoaderCircle, MapPin, Search, Sparkles, Users } from 'lucide-react'
 import './App.css'
 
 const categories = ['Travel', 'Beauty', 'Fashion', 'Fitness', 'Food', 'Gaming', 'Lifestyle', 'Technology', 'Wellness']
-const ageRanges = ['18_to_24', '25_to_29', '30_to_34', '35_to_44', '45_to_54', '55_to_64', '65_plus']
+const ageRanges = ['24_and_younger', '25_to_29', '30_to_34', '35_to_44', '45_to_54', '55_and_older']
 const qlooBaseUrl = 'https://hackathon.api.qloo.com/v2'
 const initialForm = {
-  apiKey: '', ageRange: '25_to_29', gender: 'male',
+  apiKey: 'hack_0903ce45c0e0d48de8c2f41cd6728bbb1abe1321', ageRange: '25_to_29', gender: 'male',
   description: 'I create travel vlogs and explore new destinations',
   location: 'London', followers: 85000, category: 'Travel',
 }
@@ -58,17 +58,81 @@ async function getRecommendations({ apiKey, ageRange, gender, description, locat
 }
 
 function BrandCard({ brand, index }) {
+  const [isFlipped, setIsFlipped] = useState(false)
   const name = brand.name || 'Untitled brand'
   const affinity = Number(brand.query?.affinity ?? 0)
-  const imageUrl = brand.properties?.image?.url || brand.image?.url
+  const properties = brand.properties || {}
+  const imageUrl = properties.image?.url || brand.image?.url
+  const description = properties.description || properties.short_description || 'A brand aligned with your creator profile.'
+  const audience = properties.target_demographics_description
+    || properties.audience_identity
+    || (Array.isArray(properties.customer_segments) ? properties.customer_segments.join(', ') : '')
+  const products = Array.isArray(properties.products_services) && properties.products_services.length
+    ? properties.products_services
+    : Array.isArray(properties.products) ? properties.products : []
+  const incomeLevels = Array.isArray(properties.target_income_level)
+    ? properties.target_income_level
+    : properties.target_income_level ? [properties.target_income_level] : []
+  const influencerAppeal = Array.isArray(properties.influencer_appeal) ? properties.influencer_appeal : []
+  const coreValues = Array.isArray(properties.core_values) ? properties.core_values : []
+  const instagramEntry = brand.external?.instagram
+  const instagramProfile = Array.isArray(instagramEntry) ? instagramEntry[0] : instagramEntry
+  const instagramHandle = (typeof instagramProfile === 'string'
+    ? instagramProfile
+    : instagramProfile?.id || instagramProfile?.username || instagramProfile?.handle)?.replace(/^@/, '')
+  const instagramUrl = instagramHandle && /^[A-Za-z0-9._]+$/.test(instagramHandle)
+    ? `https://www.instagram.com/${instagramHandle}/`
+    : null
+  const detailsId = `brand-details-${brand.entity_id || index}`
+
   return (
-    <article className="brand-card" style={{ '--card-index': index }}>
-      <div className={`brand-mark mark-${index % 5}`} aria-hidden="true">
-        {imageUrl ? <img src={imageUrl} alt="" /> : <span>{name.slice(0, 1).toUpperCase()}</span>}
-      </div>
-      <div className="brand-copy"><span className="brand-rank">MATCH {String(index + 1).padStart(2, '0')}</span><h3>{name}</h3><p>{brand.properties?.short_description || brand.properties?.description || 'A brand aligned with your creator profile'}</p></div>
-      <div className="affinity"><span className="affinity-value">{Math.round(affinity * 100)}<small>%</small></span><span className="affinity-label">affinity</span><div className="affinity-track"><span style={{ width: `${Math.max(0, Math.min(100, affinity * 100))}%` }} /></div></div>
-      <ArrowUpRight className="brand-arrow" size={17} aria-hidden="true" />
+    <article className={`brand-card${isFlipped ? ' is-flipped' : ''}`} style={{ '--card-index': index }}>
+      <button
+        className="brand-card-front"
+        type="button"
+        onClick={() => setIsFlipped(true)}
+        aria-label={`Show details for ${name}`}
+        aria-expanded={isFlipped}
+        aria-controls={detailsId}
+        inert={isFlipped}
+      >
+        <span className={`brand-mark mark-${index % 5}`} aria-hidden="true">
+          {imageUrl ? <img src={imageUrl} alt="" /> : <span>{name.slice(0, 1).toUpperCase()}</span>}
+        </span>
+        <span className="brand-copy"><span className="brand-rank">MATCH {String(index + 1).padStart(2, '0')}</span><span className="brand-name">{name}</span><span className="brand-summary">{properties.short_description || description}</span></span>
+        <span className="affinity"><span className="affinity-value">{Math.round(affinity * 100)}<small>%</small></span><span className="affinity-label">affinity</span><span className="affinity-track"><span style={{ width: `${Math.max(0, Math.min(100, affinity * 100))}%` }} /></span></span>
+        <ArrowUpRight className="brand-arrow" size={17} aria-hidden="true" />
+      </button>
+      <section
+        className="brand-card-back"
+        id={detailsId}
+        aria-label={`${name} details`}
+        aria-hidden={!isFlipped}
+        inert={!isFlipped}
+      >
+        <div className="brand-details">
+          <div className="brand-details-heading">
+            <span className="brand-rank">BRAND PROFILE</span>
+            <h3>{name}</h3>
+            <button className="brand-back-button" type="button" onClick={() => setIsFlipped(false)}>
+              <ArrowLeft size={14} /> Back to match
+            </button>
+          </div>
+          <p className="brand-description">{description}</p>
+          {audience && <p className="brand-audience"><strong>Customers</strong>{audience}</p>}
+          {properties.founded_year && <p className="brand-established"><strong>Established</strong>{properties.founded_year}</p>}
+          {products.length > 0 && <div className="brand-detail-group"><strong>Products sold</strong><div className="brand-chips">{products.map((product) => <span key={product}>{product}</span>)}</div></div>}
+          {incomeLevels.length > 0 && <div className="brand-detail-group"><strong>Target income</strong><div className="brand-chips">{incomeLevels.map((level) => <span key={level}>{level}</span>)}</div></div>}
+          {influencerAppeal.length > 0 && <div className="brand-detail-group"><strong>Influencer appeal</strong><div className="brand-chips">{influencerAppeal.map((type) => <span key={type}>{type}</span>)}</div></div>}
+          {coreValues.length > 0 && <div className="brand-detail-group"><strong>Core values</strong><div className="brand-chips">{coreValues.map((value) => <span key={value}>{value}</span>)}</div></div>}
+        </div>
+        <aside className="brand-social">
+          <span className="brand-social-label">FOLLOW ALONG</span>
+          {instagramUrl
+            ? <a className="instagram-link" href={instagramUrl} target="_blank" rel="noreferrer"><AtSign size={17} /><span>@{instagramHandle}</span><ArrowUpRight size={13} /></a>
+            : <span className="instagram-unavailable">No Instagram listed</span>}
+        </aside>
+      </section>
     </article>
   )
 }
