@@ -1,60 +1,32 @@
-import { useState } from 'react'
-import { ArrowDownWideNarrow, ArrowLeft, ArrowUpRight, AtSign, Building2, CircleAlert, Eye, EyeOff, LoaderCircle, MapPin, Search, Sparkles, Users } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { ArrowDownWideNarrow, ArrowLeft, ArrowUpRight, AtSign, Building2, CircleAlert, Globe, Link2, LoaderCircle, MapPin, Search, Sparkles, Users } from 'lucide-react'
 import './App.css'
 
 const categories = ['Travel', 'Beauty', 'Fashion', 'Fitness', 'Food', 'Gaming', 'Lifestyle', 'Technology', 'Wellness']
-const ageRanges = ['24_and_younger', '25_to_29', '30_to_34', '35_to_44', '45_to_54', '55_and_older']
-const qlooBaseUrl = 'https://hackathon.api.qloo.com/v2'
+const popularityTiers = [
+  { label: '$', range: '0.1–0.3', min: 0.1, max: 0.3 },
+  { label: '$$', range: '0.3–0.5', min: 0.3, max: 0.5 },
+  { label: '$$$', range: '0.5–0.7', min: 0.5, max: 0.7 },
+  { label: '$$$$', range: '0.7+', min: 0.7 },
+]
 const initialForm = {
-  apiKey: 'hack_0903ce45c0e0d48de8c2f41cd6728bbb1abe1321', ageRange: '25_to_29', gender: 'male',
+  ageRange: '25_to_29', gender: 'male',
   description: 'I create travel vlogs and explore new destinations',
   location: 'London', followers: 85000, category: 'Travel',
 }
-
-function getPopularityRange(followerCount) {
-  if (followerCount < 10000) return [0, 0.2]
-  if (followerCount < 50000) return [0.2, 0.4]
-  if (followerCount < 100000) return [0.4, 0.7]
-  if (followerCount < 500000) return [0.7, 0.85]
-  if (followerCount < 1000000) return [0.85, 0.95]
-  return [0.95, 1]
+const initialInfluencerForm = {
+  product: '', style: '', location: 'Bangalore', ageMin: 20, ageMax: 35, gender: 'female', popularityTier: 2,
 }
 
-async function qlooGet(path, params, apiKey) {
-  const url = new URL(`${qlooBaseUrl}/${path}`)
-  url.search = params.toString()
-  const response = await fetch(url, { headers: { 'X-Api-Key': apiKey, accept: 'application/json' } })
+async function getRecommendations(endpoint, request) {
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
   const data = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(data.message || data.error || `Qloo request failed (${response.status})`)
-  return data
-}
-
-async function getRecommendations({ apiKey, ageRange, gender, description, location, followers, category }) {
-  const tagParams = new URLSearchParams({
-    'feature.typo_tolerance': 'true',
-    'filter.query': `${category || ''} ${description}`.trim(),
-    'feature.semantic_search': 'true',
-    page: '1',
-    take: '10',
-  })
-  const tagData = await qlooGet('tags', tagParams, apiKey)
-  const tagUrns = (tagData.results?.tags || []).map((tag) => tag.id).filter(Boolean)
-  if (!tagUrns.length) return []
-
-  const [popularityMin, popularityMax] = getPopularityRange(Number(followers))
-  const insightParams = new URLSearchParams({
-    'filter.type': 'urn:entity:brand',
-    'signal.demographics.age': ageRange,
-    'signal.interests.tags': tagUrns.join(','),
-    'signal.location.query': location.trim(),
-    'filter.popularity.min': String(popularityMin),
-    'filter.popularity.max': String(popularityMax),
-    take: '10',
-  })
-  if (gender && gender !== 'any') insightParams.set('signal.demographics.gender', gender)
-
-  const insightData = await qlooGet('insights/', insightParams, apiKey)
-  return insightData.results?.entities || []
+  if (!response.ok) throw new Error(data.error || `Recommendation request failed (${response.status})`)
+  return data.entities || []
 }
 
 function BrandCard({ brand, index }) {
@@ -137,9 +109,77 @@ function BrandCard({ brand, index }) {
   )
 }
 
+function getSocialUrl(entry, platform) {
+  const profile = Array.isArray(entry) ? entry[0] : entry
+  if (!profile) return null
+
+  const value = typeof profile === 'string'
+    ? profile
+    : profile.url || profile.href || profile.username || profile.handle || profile.id || profile.value
+  if (typeof value !== 'string' || !value.trim()) return null
+
+  const normalized = value.trim().replace(/^@/, '')
+  if (/^https?:\/\//i.test(normalized)) {
+    try {
+      const url = new URL(normalized)
+      return ['http:', 'https:'].includes(url.protocol) ? url.href : null
+    } catch {
+      return null
+    }
+  }
+
+  if (platform === 'website') return null
+  if (!/^[A-Za-z0-9._]+$/.test(normalized)) return null
+  return platform === 'instagram'
+    ? `https://www.instagram.com/${normalized}/`
+    : `https://twitter.com/${normalized}`
+}
+
+function getShortDescription(value) {
+  if (typeof value === 'string') return value.trim()
+  if (!Array.isArray(value)) return ''
+
+  const descriptions = value.filter((item) => typeof item?.value === 'string' && item.value.trim())
+  const englishDescription = descriptions.find((item) => item.language?.toLowerCase() === 'en')
+  return (englishDescription || descriptions[0])?.value.trim() || ''
+}
+
+function InfluencerCard({ person, index }) {
+  const name = person.name || 'Unknown creator'
+  const affinity = Number(person.query?.affinity ?? 0)
+  const properties = person.properties || {}
+  const imageUrl = properties.image?.url || person.image?.url
+  const description = getShortDescription(properties.short_descriptions)
+  const instagramUrl = getSocialUrl(person.external?.instagram_username || person.external?.instagram, 'instagram')
+  const twitterUrl = getSocialUrl(person.external?.twitter_username || person.external?.twitter, 'twitter')
+  const websiteUrl = getSocialUrl(properties.official_website || person.external?.website || properties.website, 'website')
+
+  return (
+    <article className="brand-card influencer-card" style={{ '--card-index': index }}>
+      <span className={`brand-mark mark-${index % 5}`} aria-hidden="true">
+        {imageUrl ? <img src={imageUrl} alt="" /> : <span>{name.slice(0, 1).toUpperCase()}</span>}
+      </span>
+      <span className="brand-copy">
+        <span className="brand-rank">CREATOR {String(index + 1).padStart(2, '0')}</span>
+        <span className="brand-name">{name}</span>
+        <span className="brand-summary">{description}</span>
+        <span className="influencer-socials">
+          {instagramUrl && <a className="influencer-social" href={instagramUrl} target="_blank" rel="noreferrer" aria-label={`${name} on Instagram`}><AtSign size={14} /><span>Instagram</span><ArrowUpRight size={11} /></a>}
+          {twitterUrl && <a className="influencer-social" href={twitterUrl} target="_blank" rel="noreferrer" aria-label={`${name} on Twitter`}><Link2 size={14} /><span>Twitter</span><ArrowUpRight size={11} /></a>}
+          {websiteUrl && <a className="influencer-social" href={websiteUrl} target="_blank" rel="noreferrer" aria-label={`${name} website`}><Globe size={14} /><span>Website</span><ArrowUpRight size={11} /></a>}
+        </span>
+      </span>
+      <span className="affinity"><span className="affinity-value">{Math.round(affinity * 100)}<small>%</small></span><span className="affinity-label">affinity</span><span className="affinity-track"><span style={{ width: `${Math.max(0, Math.min(100, affinity * 100))}%` }} /></span></span>
+      <ArrowUpRight className="brand-arrow" size={17} aria-hidden="true" />
+    </article>
+  )
+}
+
 function App() {
+  const activeAgeHandle = useRef(null)
+  const [role, setRole] = useState(null)
   const [form, setForm] = useState(initialForm)
-  const [showApiKey, setShowApiKey] = useState(false)
+  const [influencerForm, setInfluencerForm] = useState(initialInfluencerForm)
   const [brands, setBrands] = useState([])
   const [hasSearched, setHasSearched] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -150,12 +190,55 @@ function App() {
     setForm((current) => ({ ...current, [name]: name === 'followers' ? Number(value) : value }))
   }
 
+  function updateInfluencerField(event) {
+    const { name, value } = event.target
+    setInfluencerForm((current) => ({
+      ...current,
+      [name]: ['ageMin', 'ageMax', 'popularityTier'].includes(name) ? Number(value) : value,
+    }))
+  }
+
+  function updateAgeHandle(handle, value) {
+    setInfluencerForm((current) => handle === 'ageMin'
+      ? { ...current, ageMin: Math.min(value, current.ageMax - 1) }
+      : { ...current, ageMax: Math.max(value, current.ageMin + 1) })
+  }
+
+  function handleAgeTrackPointerDown(event) {
+    if (event.target instanceof HTMLInputElement) return
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const age = Math.round(18 + Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)) * 47)
+    const handle = Math.abs(age - influencerForm.ageMin) <= Math.abs(age - influencerForm.ageMax) ? 'ageMin' : 'ageMax'
+    activeAgeHandle.current = handle
+    event.currentTarget.setPointerCapture(event.pointerId)
+    updateAgeHandle(handle, age)
+  }
+
+  function handleAgeTrackPointerMove(event) {
+    if (!activeAgeHandle.current) return
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const age = Math.round(18 + Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)) * 47)
+    updateAgeHandle(activeAgeHandle.current, age)
+  }
+
+  function handleAgeTrackPointerUp(event) {
+    activeAgeHandle.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+  }
+
   async function handleSubmit(event) {
     event.preventDefault()
     setLoading(true)
     setError('')
     try {
-      const entities = await getRecommendations(form)
+      const isBrand = role === 'brand'
+      const request = isBrand
+        ? { ...influencerForm, popularityTier: Number(influencerForm.popularityTier) }
+        : form
+      const entities = await getRecommendations(
+        isBrand ? '/api/influencers' : '/api/recommendations',
+        request,
+      )
       setBrands(entities.sort((a, b) => Number(b.query?.affinity ?? 0) - Number(a.query?.affinity ?? 0)))
       setHasSearched(true)
     } catch (requestError) {
@@ -169,41 +252,102 @@ function App() {
 
   const followerLabel = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(form.followers)
   const creatorTier = form.followers < 10000 ? 'Nano creator' : form.followers < 50000 ? 'Micro creator' : form.followers < 100000 ? 'Mid-tier creator' : form.followers < 500000 ? 'Macro creator' : form.followers < 1000000 ? 'Top creator' : 'Celebrity creator'
+  const selectedPopularity = popularityTiers[influencerForm.popularityTier]
+  const ageMinFraction = (influencerForm.ageMin - 18) / 47
+  const ageMaxRightFraction = (65 - influencerForm.ageMax) / 47
+
+  function chooseRole(nextRole) {
+    setRole(nextRole)
+    setBrands([])
+    setHasSearched(false)
+    setError('')
+  }
 
   return (
     <div className="app-shell">
       <header className="topbar">
         <a className="wordmark" href="#top" aria-label="Signal home"><span className="wordmark-icon"><Sparkles size={16} /></span><span>signal<span className="wordmark-period">.</span></span></a>
         <div className="topbar-note"><span className="status-dot" /> CREATOR INTELLIGENCE <span className="topbar-divider">/</span> BRAND DISCOVERY</div>
-        <a className="topbar-link" href="https://qloo.com" target="_blank" rel="noreferrer">Powered by Qloo <ArrowUpRight size={14} /></a>
+        {role && <button className="topbar-link role-switch" type="button" onClick={() => chooseRole(null)}><ArrowLeft size={14} /> Change path</button>}
+        {!role && <span className="topbar-link">AUDIENCE + CULTURE SIGNALS</span>}
       </header>
       <main id="top" className="workspace">
-        <section className="intro"><div className="eyebrow"><span>01</span> THE CREATOR MATCHER</div><h1>Find your next<br /><em>brand match.</em></h1><p>Turn your audience and point of view into a shortlist of brands that belong in your world.</p><div className="intro-stamp" aria-hidden="true"><span>CREATOR</span><Sparkles size={19} /><span>× BRAND</span></div></section>
+        {!role ? (
+          <>
+            <section className="intro"><div className="eyebrow"><span>01</span> THE COLLABORATION MATCHER</div><h1>Find your next<br /><em>great match.</em></h1><p>Tell us which side of the collaboration you’re on. We’ll find the right fit.</p><div className="intro-stamp" aria-hidden="true"><span>CREATOR</span><Sparkles size={19} /><span>× BRAND</span></div></section>
+            <section className="role-picker" aria-labelledby="role-heading">
+              <span className="section-kicker">LET’S GET STARTED</span>
+              <h2 id="role-heading">Which best describes you?</h2>
+              <p>Choose a path to find a collaboration that makes sense for you.</p>
+              <div className="role-options">
+                <button className="role-card" type="button" onClick={() => chooseRole('influencer')}>
+                  <span className="role-icon"><Users size={22} /></span>
+                  <span className="role-card-copy"><strong>Influencer looking for a brand</strong><small>Find brands that fit your audience and content.</small></span>
+                  <ArrowUpRight size={18} />
+                </button>
+                <button className="role-card" type="button" onClick={() => chooseRole('brand')}>
+                  <span className="role-icon"><Building2 size={22} /></span>
+                  <span className="role-card-copy"><strong>Brand looking for an influencer</strong><small>Discover creators aligned with your product and style.</small></span>
+                  <ArrowUpRight size={18} />
+                </button>
+              </div>
+              <a className="role-powered" href="https://qloo.com" target="_blank" rel="noreferrer">Powered by Qloo <ArrowUpRight size={13} /></a>
+            </section>
+          </>
+        ) : <>
+        <section className="intro"><div className="eyebrow"><span>01</span> {role === 'brand' ? 'THE BRAND MATCHER' : 'THE CREATOR MATCHER'}</div><h1>{role === 'brand' ? <>Meet your next<br /><em>creator match.</em></> : <>Find your next<br /><em>brand match.</em></>}</h1><p>{role === 'brand' ? 'Find creators whose interests and style connect with your product.' : 'Turn your audience and point of view into a shortlist of brands that belong in your world.'}</p><div className="intro-stamp" aria-hidden="true"><span>{role === 'brand' ? 'BRAND' : 'CREATOR'}</span><Sparkles size={19} /><span>× {role === 'brand' ? 'CREATOR' : 'BRAND'}</span></div></section>
         <div className="workspace-grid">
           <aside className="brief-panel">
-            <div className="panel-heading"><div><span className="section-kicker">YOUR PROFILE</span><h2>Build a brief</h2></div><span className="step-count">01 <span>/ 01</span></span></div>
+            <div className="panel-heading"><div><span className="section-kicker">{role === 'brand' ? 'YOUR CAMPAIGN' : 'YOUR PROFILE'}</span><h2>{role === 'brand' ? 'Find creators' : 'Build a brief'}</h2></div><span className="step-count">01 <span>/ 01</span></span></div>
             <form onSubmit={handleSubmit}>
-              <fieldset className="field-group api-key-group"><legend>Qloo access</legend><label className="field"><span>API key</span><span className="api-key-control"><input name="apiKey" type={showApiKey ? 'text' : 'password'} value={form.apiKey} onChange={updateField} placeholder="Enter your Qloo API key" autoComplete="off" required /><button className="api-key-toggle" type="button" onClick={() => setShowApiKey((visible) => !visible)} aria-label={showApiKey ? 'Hide API key' : 'Show API key'}>{showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}</button></span></label><p className="api-key-note">Used for this request only; never saved.</p></fieldset>
-              <fieldset className="field-group"><legend>Audience</legend><div className="field-pair">
-                <label className="field"><span>Age range</span><select name="ageRange" value={form.ageRange} onChange={updateField}>{ageRanges.map((range) => <option key={range} value={range}>{range.replace('_to_', '–').replace('_plus', '+')}</option>)}</select></label>
-                <label className="field"><span>Gender</span><select name="gender" value={form.gender} onChange={updateField}><option value="female">Female</option><option value="male">Male</option><option value="any">Any</option></select></label>
-              </div><label className="field location-field"><span>Audience location</span><span className="input-with-icon"><MapPin size={16} /><input name="location" value={form.location} onChange={updateField} placeholder="City or region" required /></span></label></fieldset>
-              <fieldset className="field-group creator-group"><legend>Your content</legend><label className="field"><span>What do you make?</span><textarea name="description" value={form.description} onChange={updateField} placeholder="Describe your content and audience..." rows="3" required /></label><label className="field"><span>Content category</span><select name="category" value={form.category} onChange={updateField}>{categories.map((category) => <option key={category} value={category}>{category}</option>)}</select></label></fieldset>
-              <fieldset className="field-group follower-group"><legend>Audience size</legend><div className="follower-readout"><span className="follower-value"><Users size={17} /> {followerLabel}</span><span className="tier-label">{creatorTier}</span></div><input className="follower-slider" type="range" name="followers" min="1000" max="1000000" step="1000" value={form.followers} onChange={updateField} aria-label="Follower count" /><div className="range-labels"><span>1K</span><span>250K</span><span>500K</span><span>1M+</span></div></fieldset>
-              <button className="submit-button" type="submit" disabled={loading}>{loading ? <><LoaderCircle className="spin" size={17} /> Finding matches</> : <><Search size={17} /> Find brand matches <ArrowUpRight size={16} /></>}</button>
+              {role === 'brand' ? <>
+                <fieldset className="field-group"><legend>Product &amp; style</legend>
+                  <label className="field"><span>What product are you promoting?</span><input name="product" value={influencerForm.product} onChange={updateInfluencerField} placeholder="e.g. sneakers" required /></label>
+                  <label className="field location-field"><span>Creator style (optional)</span><input name="style" value={influencerForm.style} onChange={updateInfluencerField} placeholder="e.g. streetwear, minimalist" /></label>
+                </fieldset>
+                <fieldset className="field-group"><legend>Creator audience</legend>
+                  <div className="field-pair">
+                    <label className="field"><span>Gender</span><select name="gender" value={influencerForm.gender} onChange={updateInfluencerField}><option value="female">Female</option><option value="male">Male</option><option value="any">Any</option></select></label>
+                    <label className="field"><span>Location</span><span className="input-with-icon"><MapPin size={16} /><input name="location" value={influencerForm.location} onChange={updateInfluencerField} placeholder="City or region" required /></span></label>
+                  </div>
+                  <div className="range-heading"><span>Age range</span><strong>{influencerForm.ageMin}–{influencerForm.ageMax}</strong></div>
+                  <div className="dual-range" onPointerDown={handleAgeTrackPointerDown} onPointerMove={handleAgeTrackPointerMove} onPointerUp={handleAgeTrackPointerUp} onPointerCancel={handleAgeTrackPointerUp}>
+                    <div className="dual-range-track"><span style={{ left: `calc(${ageMinFraction * 100}% + ${7 - ageMinFraction * 14}px)`, right: `calc(${ageMaxRightFraction * 100}% + ${7 - ageMaxRightFraction * 14}px)` }} /></div>
+                    <input type="range" name="ageMin" min="18" max="65" step="1" value={influencerForm.ageMin} onChange={(event) => updateAgeHandle('ageMin', Number(event.target.value))} aria-label="Minimum influencer age" />
+                    <input type="range" name="ageMax" min="18" max="65" step="1" value={influencerForm.ageMax} onChange={(event) => updateAgeHandle('ageMax', Number(event.target.value))} aria-label="Maximum influencer age" />
+                  </div>
+                  <div className="range-labels"><span>18</span><span>65</span></div>
+                </fieldset>
+                <fieldset className="field-group popularity-group"><legend>Budget / popularity</legend>
+                  <div className="popularity-readout"><strong>{selectedPopularity.label}</strong><span>{selectedPopularity.range}</span></div>
+                  <input className="follower-slider popularity-slider" type="range" name="popularityTier" min="0" max="3" step="1" value={influencerForm.popularityTier} onChange={updateInfluencerField} aria-label="Creator popularity and budget tier" />
+                  <div className="range-labels popularity-labels">{popularityTiers.map((tier) => <span key={tier.label}>{tier.label}</span>)}</div>
+                </fieldset>
+              </> : <>
+                <fieldset className="field-group"><legend>Audience</legend><div className="field-pair">
+                  <label className="field"><span>Age range</span><select name="ageRange" value={form.ageRange} onChange={updateField}>{['24_and_younger', '25_to_29', '30_to_34', '35_to_44', '45_to_54', '55_and_older'].map((range) => <option key={range} value={range}>{range.replace('_to_', '–').replace('_plus', '+')}</option>)}</select></label>
+                  <label className="field"><span>Gender</span><select name="gender" value={form.gender} onChange={updateField}><option value="female">Female</option><option value="male">Male</option><option value="any">Any</option></select></label>
+                </div><label className="field location-field"><span>Audience location</span><span className="input-with-icon"><MapPin size={16} /><input name="location" value={form.location} onChange={updateField} placeholder="City or region" required /></span></label></fieldset>
+                <fieldset className="field-group creator-group"><legend>Your content</legend><label className="field"><span>What do you make?</span><textarea name="description" value={form.description} onChange={updateField} placeholder="Describe your content and audience..." rows="3" required /></label><label className="field"><span>Content category</span><select name="category" value={form.category} onChange={updateField}>{categories.map((category) => <option key={category} value={category}>{category}</option>)}</select></label></fieldset>
+                <fieldset className="field-group follower-group"><legend>Audience size</legend><div className="follower-readout"><span className="follower-value"><Users size={17} /> {followerLabel}</span><span className="tier-label">{creatorTier}</span></div><input className="follower-slider" type="range" name="followers" min="1000" max="1000000" step="1000" value={form.followers} onChange={updateField} aria-label="Follower count" /><div className="range-labels"><span>1K</span><span>250K</span><span>500K</span><span>1M+</span></div></fieldset>
+              </>}
+              <button className="submit-button" type="submit" disabled={loading}>{loading ? <><LoaderCircle className="spin" size={17} /> Finding matches</> : <><Search size={17} /> Find {role === 'brand' ? 'influencers' : 'brand matches'} <ArrowUpRight size={16} /></>}</button>
               <p className="privacy-note">Your brief stays private. Only matching signals are sent to Qloo.</p>
             </form>
           </aside>
           <section className="results-panel" aria-live="polite">
-            <div className="results-heading"><div><span className="section-kicker">THE SHORTLIST</span><h2>{hasSearched ? 'Your brand matches' : 'Made for your signal'}</h2></div><div className="results-count">{hasSearched && !error ? <><span>{String(brands.length).padStart(2, '0')}</span> RESULTS</> : <><ArrowDownWideNarrow size={16} /> AFFINITY RANKED</>}</div></div>
+            <div className="results-heading"><div><span className="section-kicker">THE SHORTLIST</span><h2>{hasSearched ? (role === 'brand' ? 'Your influencer matches' : 'Your brand matches') : 'Made for your signal'}</h2></div><div className="results-count">{hasSearched && !error ? <><span>{String(brands.length).padStart(2, '0')}</span> RESULTS</> : <><ArrowDownWideNarrow size={16} /> AFFINITY RANKED</>}</div></div>
             {loading ? <div className="state-panel loading-state"><LoaderCircle className="spin" size={27} /><p>Reading your audience signals<span>Finding brands with a natural fit.</span></p></div>
-              : error ? <div className="state-panel error-state"><CircleAlert size={24} /><h3>Couldn’t find matches</h3><p>{error}</p><span>Check your Qloo API key and try again.</span></div>
-                : hasSearched && brands.length === 0 ? <div className="state-panel"><div className="empty-mark"><Search size={23} /></div><h3>No matches this time</h3><p>Try broadening the content description or changing the location.</p></div>
-                  : hasSearched ? <div className="brand-list">{brands.map((brand, index) => <BrandCard key={brand.entity_id || brand.id || `${brand.name}-${index}`} brand={brand} index={index} />)}</div>
-                    : <div className="results-empty"><div className="orbit-art" aria-hidden="true"><span className="orbit orbit-one" /><span className="orbit orbit-two" /><span className="orbit-core"><Sparkles size={23} /></span><span className="orbit-node node-one" /><span className="orbit-node node-two" /><span className="orbit-node node-three" /></div><span className="empty-overline">A BETTER KIND OF SPONSORSHIP</span><h3>Good partnerships<br />feel <em>inevitable.</em></h3><p>Set your creator signals and we’ll surface brands with an audience affinity to match.</p><div className="signal-tags"><span><Users size={13} /> Audience</span><span><Building2 size={13} /> Brand fit</span><span><MapPin size={13} /> Place</span></div></div>}
+              : error ? <div className="state-panel error-state"><CircleAlert size={24} /><h3>Couldn’t find matches</h3><p>{error}</p><span>Check the server’s Qloo configuration and try again.</span></div>
+                : hasSearched && brands.length === 0 ? <div className="state-panel"><div className="empty-mark"><Search size={23} /></div><h3>No matches this time</h3><p>Try broadening your {role === 'brand' ? 'product or style keywords' : 'content description'} or changing the location.</p></div>
+                  : hasSearched ? <div className="brand-list">{brands.map((brand, index) => role === 'brand'
+                    ? <InfluencerCard key={brand.entity_id || brand.id || `${brand.name}-${index}`} person={brand} index={index} />
+                    : <BrandCard key={brand.entity_id || brand.id || `${brand.name}-${index}`} brand={brand} index={index} />)}</div>
+                    : <div className="results-empty"><div className="orbit-art" aria-hidden="true"><span className="orbit orbit-one" /><span className="orbit orbit-two" /><span className="orbit-core"><Sparkles size={23} /></span><span className="orbit-node node-one" /><span className="orbit-node node-two" /><span className="orbit-node node-three" /></div><span className="empty-overline">A BETTER KIND OF COLLABORATION</span><h3>Good partnerships<br />feel <em>inevitable.</em></h3><p>{role === 'brand' ? 'Add your product, creator style, and target audience to find people who match.' : 'Set your creator signals and we’ll surface brands with an audience affinity to match.'}</p><div className="signal-tags"><span><Users size={13} /> Audience</span><span><Building2 size={13} /> {role === 'brand' ? 'Creator fit' : 'Brand fit'}</span><span><MapPin size={13} /> Place</span></div></div>}
             {hasSearched && brands.length > 0 && <p className="results-footnote">Affinity scores reflect audience alignment, not a guarantee of partnership.</p>}
           </section>
         </div>
+        </>}
       </main>
       <footer className="site-footer"><span>© 2026 SIGNAL STUDIO</span><span>BUILT FOR THE NEXT GOOD COLLABORATION <span className="footer-star">✳</span></span></footer>
     </div>

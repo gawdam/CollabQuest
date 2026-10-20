@@ -73,4 +73,69 @@ app.post('/api/recommendations', async (request, response) => {
   }
 })
 
+app.post('/api/influencers', async (request, response) => {
+  const { product, style = '', location, ageMin, ageMax, gender = 'any', popularityTier } = request.body || {}
+  const minimumAge = Number(ageMin)
+  const maximumAge = Number(ageMax)
+  const tierIndex = Number(popularityTier)
+  if (
+    typeof product !== 'string' || !product.trim()
+    || typeof style !== 'string'
+    || typeof location !== 'string' || !location.trim()
+    || !Number.isInteger(minimumAge) || !Number.isInteger(maximumAge)
+    || minimumAge < 18 || maximumAge > 100 || minimumAge >= maximumAge
+    || !['female', 'male', 'any'].includes(gender)
+    || !Number.isInteger(tierIndex) || tierIndex < 0 || tierIndex > 3
+  ) {
+    return response.status(400).json({ error: 'Add a product, location, valid age range, gender, and popularity tier.' })
+  }
+
+  const apiKey = process.env.QLOO_API_KEY
+  if (!apiKey) return response.status(503).json({ error: 'Qloo is not configured on this server.' })
+
+  try {
+    const resolveTags = async (keyword) => {
+      const tagParams = new URLSearchParams({
+        'filter.query': keyword,
+        'feature.semantic_search': 'true',
+        take: '5',
+      })
+      const tagData = await qlooGet('tags', tagParams, apiKey)
+      return (tagData.results?.tags || []).map((tag) => tag.id).filter(Boolean)
+    }
+    const tagGroups = await Promise.all([
+      resolveTags(product.trim()),
+      ...(style.trim() ? [resolveTags(style.trim())] : []),
+    ])
+    const tagUrns = [...new Set(tagGroups.flat())]
+    if (!tagUrns.length) return response.json({ entities: [] })
+
+    const tier = [
+      { min: 0.1, max: 0.3 },
+      { min: 0.3, max: 0.5 },
+      { min: 0.5, max: 0.7 },
+      { min: 0.7 },
+    ][tierIndex]
+    const insightParams = new URLSearchParams({
+      'filter.type': 'urn:entity:person',
+      'operator.signal.interests.tags': 'union',
+      'signal.location.query': location.trim(),
+      'signal.interests.tags': tagUrns.join(','),
+      'filter.demographics.age_min': String(minimumAge),
+      'filter.demographics.age_max': String(maximumAge),
+      'filter.popularity.min': String(tier.min),
+      take: '10',
+    })
+    if (tier.max !== undefined) insightParams.set('filter.popularity.max', String(tier.max))
+    if (gender !== 'any') insightParams.set('filter.demographics.gender', gender)
+
+    const insightData = await qlooGet('insights/', insightParams, apiKey)
+    return response.json({ entities: insightData.results?.entities || [] })
+  } catch (error) {
+    console.error('Qloo influencer search failed:', error.message)
+    const status = error.status >= 400 && error.status < 500 ? error.status : 502
+    return response.status(status).json({ error: error.message || 'Could not retrieve influencer recommendations.' })
+  }
+})
+
 app.listen(port, () => console.log(`Qloo API proxy listening on http://localhost:${port}`))
