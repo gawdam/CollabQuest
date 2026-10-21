@@ -30,10 +30,14 @@ async function qlooGet(path, params, apiKey) {
 }
 
 app.post('/api/recommendations', async (request, response) => {
-  const { ageRange, gender, description, location, followers, category } = request.body || {}
+  const { ageRange, gender, description, location, followers, category, page = 1 } = request.body || {}
   const followerCount = Number(followers)
+  const resultPage = Number(page)
   if (!ageRange || !description?.trim() || !location?.trim() || !Number.isFinite(followerCount)) {
     return response.status(400).json({ error: 'Add a content description, location, age range, and follower count.' })
+  }
+  if (!Number.isInteger(resultPage) || resultPage < 1) {
+    return response.status(400).json({ error: 'Page must be a positive integer.' })
   }
   if (followerCount < 1000 || followerCount > 1000000) {
     return response.status(400).json({ error: 'Follower count must be between 1,000 and 1,000,000.' })
@@ -60,7 +64,8 @@ app.post('/api/recommendations', async (request, response) => {
       'signal.location.query': location.trim(),
       'filter.popularity.min': String(popularityMin),
       'filter.popularity.max': String(popularityMax),
-      take: '10',
+      page: String(resultPage),
+      take: '50',
     })
     if (gender && gender !== 'any') insightParams.set('signal.demographics.gender', gender)
 
@@ -74,10 +79,14 @@ app.post('/api/recommendations', async (request, response) => {
 })
 
 app.post('/api/influencers', async (request, response) => {
-  const { product, style = '', location, ageMin, ageMax, gender = 'any', popularityTier } = request.body || {}
+  const {
+    product, style = '', location, ageMin, ageMax, gender = 'any',
+    popularityTier, creatorType = 'both', page = 1,
+  } = request.body || {}
   const minimumAge = Number(ageMin)
   const maximumAge = Number(ageMax)
   const tierIndex = Number(popularityTier)
+  const resultPage = Number(page)
   if (
     typeof product !== 'string' || !product.trim()
     || typeof style !== 'string'
@@ -86,6 +95,8 @@ app.post('/api/influencers', async (request, response) => {
     || minimumAge < 18 || maximumAge > 100 || minimumAge >= maximumAge
     || !['female', 'male', 'any'].includes(gender)
     || !Number.isInteger(tierIndex) || tierIndex < 0 || tierIndex > 3
+    || !['instagrammers', 'youtubers', 'both'].includes(creatorType)
+    || !Number.isInteger(resultPage) || resultPage < 1
   ) {
     return response.status(400).json({ error: 'Add a product, location, valid age range, gender, and popularity tier.' })
   }
@@ -108,7 +119,6 @@ app.post('/api/influencers', async (request, response) => {
       ...(style.trim() ? [resolveTags(style.trim())] : []),
     ])
     const tagUrns = [...new Set(tagGroups.flat())]
-    if (!tagUrns.length) return response.json({ entities: [] })
 
     const tier = [
       { min: 0.1, max: 0.3 },
@@ -116,21 +126,57 @@ app.post('/api/influencers', async (request, response) => {
       { min: 0.5, max: 0.7 },
       { min: 0.7 },
     ][tierIndex]
-    const insightParams = new URLSearchParams({
-      'filter.type': 'urn:entity:person',
-      'operator.signal.interests.tags': 'union',
-      'signal.location.query': location.trim(),
-      'signal.interests.tags': tagUrns.join(','),
-      'filter.demographics.age_min': String(minimumAge),
-      'filter.demographics.age_max': String(maximumAge),
-      'filter.popularity.min': String(tier.min),
-      take: '10',
+    const batchTake = 50
+    const creatorTags = [
+      { type: 'influencer', urn: 'urn:tag:genre:person:influencer' },
+      { type: 'youtuber', urn: 'urn:tag:genre:person:youtuber' },
+    ].filter(({ type }) => creatorType === 'both'
+      || (creatorType === 'youtubers' ? type === 'youtuber' : type === 'influencer'))
+    const requests = creatorTags.map(async ({ type, urn }) => {
+      const insightParams = new URLSearchParams({
+        'filter.type': 'urn:entity:person',
+        'operator.signal.interests.tags': 'union',
+        'signal.location.query': location.trim(),
+        'signal.interests.tags': [...tagUrns, urn].join(','),
+        'filter.demographics.age_min': String(minimumAge),
+        'filter.demographics.age_max': String(maximumAge),
+        'filter.popularity.min': String(tier.min),
+        page: String(resultPage),
+        take: String(batchTake),
+      })
+      if (tier.max !== undefined) insightParams.set('filter.popularity.max', String(tier.max))
+      if (gender !== 'any') insightParams.set('filter.demographics.gender', gender)
+      const data = await qlooGet('insights/', insightParams, apiKey)
+      return { type, entities: data.results?.entities || [] }
     })
-    if (tier.max !== undefined) insightParams.set('filter.popularity.max', String(tier.max))
-    if (gender !== 'any') insightParams.set('filter.demographics.gender', gender)
 
-    const insightData = await qlooGet('insights/', insightParams, apiKey)
-    return response.json({ entities: insightData.results?.entities || [] })
+    const sourceResults = await Promise.all(requests)
+    const entities = []
+    const seen = new Map()
+    for (const source of sourceResults) {
+      for (const entity of source.entities) {
+        const id = entity.entity_id || entity.id || entity.name
+        if (!id) continue
+        if (seen.has(id)) {
+          const existingIndex = seen.get(id)
+          const existing = entities[existingIndex]
+          entities[existingIndex] = {
+            ...existing,
+            creatorTypes: [...new Set([...existing.creatorTypes, source.type])],
+          }
+          continue
+        }
+        seen.set(id, entities.length)
+        entities.push({
+          ...entity,
+          creatorTypes: [source.type],
+        })
+      }
+    }
+    return response.json({
+      entities,
+      hasMore: sourceResults.some((source) => source.entities.length === batchTake),
+    })
   } catch (error) {
     console.error('Qloo influencer search failed:', error.message)
     const status = error.status >= 400 && error.status < 500 ? error.status : 502

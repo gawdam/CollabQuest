@@ -26,7 +26,7 @@ async function getRecommendations(endpoint, request) {
   })
   const data = await response.json().catch(() => ({}))
   if (!response.ok) throw new Error(data.error || `Recommendation request failed (${response.status})`)
-  return data.entities || []
+  return { entities: data.entities || [], hasMore: Boolean(data.hasMore) }
 }
 
 function BrandCard({ brand, index }) {
@@ -153,6 +153,7 @@ function InfluencerCard({ person, index }) {
   const instagramUrl = getSocialUrl(person.external?.instagram_username || person.external?.instagram, 'instagram')
   const twitterUrl = getSocialUrl(person.external?.twitter_username || person.external?.twitter, 'twitter')
   const websiteUrl = getSocialUrl(properties.official_website || person.external?.website || properties.website, 'website')
+  const creatorTypes = person.creatorTypes || [person.creatorType || 'influencer']
 
   return (
     <article className="brand-card influencer-card" style={{ '--card-index': index }}>
@@ -161,7 +162,9 @@ function InfluencerCard({ person, index }) {
       </span>
       <span className="brand-copy">
         <span className="brand-rank">CREATOR {String(index + 1).padStart(2, '0')}</span>
-        <span className="brand-name">{name}</span>
+        <span className="brand-name">{name}<span className="creator-platforms">{creatorTypes.map((type) => type === 'youtuber'
+          ? <span className="creator-platform youtube-platform" key={type} aria-label="YouTube" title="YouTube"><svg viewBox="0 0 24 18" aria-hidden="true"><path d="M23.5 2.8a3 3 0 0 0-2.1-2.1C19.5.2 12 .2 12 .2s-7.5 0-9.4.5A3 3 0 0 0 .5 2.8 31 31 0 0 0 0 9s0 3.4.5 6.2a3 3 0 0 0 2.1 2.1c1.9.5 9.4.5 9.4.5s7.5 0 9.4-.5a3 3 0 0 0 2.1-2.1A31 31 0 0 0 24 9s0-3.4-.5-6.2Z" /><path className="platform-play" d="m9.6 12.8 6.2-3.8-6.2-3.8z" /></svg></span>
+          : <span className="creator-platform instagram-platform" key={type} aria-label="Instagram" title="Instagram"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2" y="2" width="16" height="16" rx="4" /><circle cx="10" cy="10" r="3.5" /><circle className="instagram-dot" cx="14.8" cy="5.4" r="1" /></svg></span>)}</span></span>
         <span className="brand-summary">{description}</span>
         <span className="influencer-socials">
           {instagramUrl && <a className="influencer-social" href={instagramUrl} target="_blank" rel="noreferrer" aria-label={`${name} on Instagram`}><AtSign size={14} /><span>Instagram</span><ArrowUpRight size={11} /></a>}
@@ -181,6 +184,14 @@ function App() {
   const [form, setForm] = useState(initialForm)
   const [influencerForm, setInfluencerForm] = useState(initialInfluencerForm)
   const [brands, setBrands] = useState([])
+  const [resultPage, setResultPage] = useState(0)
+  const [nextApiPage, setNextApiPage] = useState(2)
+  const [hasMoreResults, setHasMoreResults] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [resultSearch, setResultSearch] = useState('')
+  const [countryFilter, setCountryFilter] = useState('')
+  const [genderFilter, setGenderFilter] = useState('')
+  const [creatorType, setCreatorType] = useState('both')
   const [hasSearched, setHasSearched] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -233,18 +244,22 @@ function App() {
     try {
       const isBrand = role === 'brand'
       const request = isBrand
-        ? { ...influencerForm, popularityTier: Number(influencerForm.popularityTier) }
+        ? { ...influencerForm, popularityTier: Number(influencerForm.popularityTier), creatorType: 'both', page: 1 }
         : form
-      const entities = await getRecommendations(
+      const { entities, hasMore } = await getRecommendations(
         isBrand ? '/api/influencers' : '/api/recommendations',
         request,
       )
       setBrands(entities.sort((a, b) => Number(b.query?.affinity ?? 0) - Number(a.query?.affinity ?? 0)))
+      setResultPage(0)
+      setNextApiPage(2)
+      setHasMoreResults(isBrand ? hasMore : entities.length === 50)
       setHasSearched(true)
     } catch (requestError) {
       setError(requestError.message || 'Something went wrong. Please try again.')
       setHasSearched(true)
       setBrands([])
+      setHasMoreResults(false)
     } finally {
       setLoading(false)
     }
@@ -261,6 +276,74 @@ function App() {
     setBrands([])
     setHasSearched(false)
     setError('')
+    setResultPage(0)
+    setNextApiPage(2)
+    setHasMoreResults(false)
+    setResultSearch('')
+    setCountryFilter('')
+    setGenderFilter('')
+  }
+
+  const countries = [...new Set(brands.flatMap((person) => {
+    const citizenship = person.properties?.citizenship
+    return (Array.isArray(citizenship) ? citizenship : citizenship ? [citizenship] : [])
+      .filter((country) => typeof country === 'string' && country.trim())
+  }))].sort((a, b) => a.localeCompare(b))
+  const filteredBrands = brands.filter((item) => {
+    const properties = item.properties || {}
+    const query = resultSearch.trim().toLocaleLowerCase()
+    const searchableText = `${item.name || ''} ${getShortDescription(properties.short_descriptions)} ${properties.description || ''}`.toLocaleLowerCase()
+    const citizenship = Array.isArray(properties.citizenship)
+      ? properties.citizenship
+      : properties.citizenship ? [properties.citizenship] : []
+    const genders = Array.isArray(properties.gender) ? properties.gender : properties.gender ? [properties.gender] : []
+    const itemCreatorTypes = item.creatorTypes || [item.creatorType || 'influencer']
+    const matchesCreatorType = role !== 'brand' || creatorType === 'both'
+      || (creatorType === 'youtubers' ? itemCreatorTypes.includes('youtuber') : itemCreatorTypes.includes('influencer'))
+    return (!query || searchableText.includes(query))
+      && (!countryFilter || citizenship.includes(countryFilter))
+      && (!genderFilter || genders.some((gender) => typeof gender === 'string' && gender.toLowerCase() === genderFilter))
+      && matchesCreatorType
+  })
+  const pageCount = Math.max(1, Math.ceil(filteredBrands.length / 10))
+  const visiblePage = Math.min(resultPage, pageCount - 1)
+  const visibleBrands = filteredBrands.slice(visiblePage * 10, visiblePage * 10 + 10)
+
+  async function changeResultPage(nextPage) {
+    if (nextPage < 0 || loadingMore) return
+    const isLastLoadedPage = nextPage >= pageCount
+    if (isLastLoadedPage && hasMoreResults) {
+      setLoadingMore(true)
+      setError('')
+      try {
+        const page = nextApiPage
+        const isBrand = role === 'brand'
+        const { entities, hasMore } = await getRecommendations(
+          isBrand ? '/api/influencers' : '/api/recommendations',
+          isBrand
+            ? { ...influencerForm, popularityTier: Number(influencerForm.popularityTier), creatorType: 'both', page }
+            : { ...form, page },
+        )
+        setBrands((current) => {
+          const seen = new Set(current.map((entity) => entity.entity_id || entity.id || entity.name))
+          return [...current, ...entities.filter((entity) => {
+            const key = entity.entity_id || entity.id || entity.name
+            if (seen.has(key)) return false
+            seen.add(key)
+            return true
+          })].sort((a, b) => Number(b.query?.affinity ?? 0) - Number(a.query?.affinity ?? 0))
+        })
+        setHasMoreResults(isBrand ? hasMore : entities.length === 50)
+        setNextApiPage(page + 1)
+        setResultPage(nextPage)
+      } catch (requestError) {
+        setError(requestError.message || 'Could not load more results.')
+      } finally {
+        setLoadingMore(false)
+      }
+      return
+    }
+    setResultPage(nextPage)
   }
 
   return (
@@ -298,7 +381,7 @@ function App() {
         <section className="intro"><div className="eyebrow"><span>01</span> {role === 'brand' ? 'THE BRAND MATCHER' : 'THE CREATOR MATCHER'}</div><h1>{role === 'brand' ? <>Meet your next<br /><em>creator match.</em></> : <>Find your next<br /><em>brand match.</em></>}</h1><p>{role === 'brand' ? 'Find creators whose interests and style connect with your product.' : 'Turn your audience and point of view into a shortlist of brands that belong in your world.'}</p><div className="intro-stamp" aria-hidden="true"><span>{role === 'brand' ? 'BRAND' : 'CREATOR'}</span><Sparkles size={19} /><span>× {role === 'brand' ? 'CREATOR' : 'BRAND'}</span></div></section>
         <div className="workspace-grid">
           <aside className="brief-panel">
-            <div className="panel-heading"><div><span className="section-kicker">{role === 'brand' ? 'YOUR CAMPAIGN' : 'YOUR PROFILE'}</span><h2>{role === 'brand' ? 'Find creators' : 'Build a brief'}</h2></div><span className="step-count">01 <span>/ 01</span></span></div>
+            <div className="panel-heading"><div><span className="section-kicker">{role === 'brand' ? 'YOUR CAMPAIGN' : 'YOUR PROFILE'}</span><h2 className={role === 'brand' ? 'preserve-font-size' : ''}>{role === 'brand' ? 'Find creators' : 'Build a brief'}</h2></div><span className="step-count">01 <span>/ 01</span></span></div>
             <form onSubmit={handleSubmit}>
               {role === 'brand' ? <>
                 <fieldset className="field-group"><legend>Product &amp; style</legend>
@@ -336,15 +419,27 @@ function App() {
             </form>
           </aside>
           <section className="results-panel" aria-live="polite">
-            <div className="results-heading"><div><span className="section-kicker">THE SHORTLIST</span><h2>{hasSearched ? (role === 'brand' ? 'Your influencer matches' : 'Your brand matches') : 'Made for your signal'}</h2></div><div className="results-count">{hasSearched && !error ? <><span>{String(brands.length).padStart(2, '0')}</span> RESULTS</> : <><ArrowDownWideNarrow size={16} /> AFFINITY RANKED</>}</div></div>
+            <div className="results-heading"><div><span className="section-kicker">THE SHORTLIST</span><h2 className={!hasSearched ? 'preserve-font-size' : ''}>{hasSearched ? (role === 'brand' ? 'Your influencer matches' : 'Your brand matches') : 'Made for your signal'}</h2></div><div className="results-count">{hasSearched && !error ? <><span>{String(filteredBrands.length).padStart(2, '0')}</span> RESULTS</> : <><ArrowDownWideNarrow size={16} /> AFFINITY RANKED</>}</div></div>
+            {hasSearched && <div className="results-filters">
+              <label className="result-filter search-filter"><span>Search</span><span className="input-with-icon"><Search size={15} /><input value={resultSearch} onChange={(event) => { setResultSearch(event.target.value); setResultPage(0) }} placeholder={role === 'brand' ? 'Search creators' : 'Search brands'} /></span></label>
+              {role === 'brand' && <>
+                <label className="result-filter"><span>Creator type</span><select value={creatorType} onChange={(event) => { setCreatorType(event.target.value); setResultPage(0) }}><option value="both">YouTubers + Instagrammers</option><option value="youtubers">YouTubers</option><option value="instagrammers">Instagrammers</option></select></label>
+                <label className="result-filter"><span>Country</span><select value={countryFilter} onChange={(event) => { setCountryFilter(event.target.value); setResultPage(0) }}><option value="">All countries</option>{countries.map((country) => <option key={country} value={country}>{country}</option>)}</select></label>
+                <label className="result-filter"><span>Gender</span><select value={genderFilter} onChange={(event) => { setGenderFilter(event.target.value); setResultPage(0) }}><option value="">Any gender</option><option value="female">Female</option><option value="male">Male</option><option value="non-binary">Non-binary</option></select></label>
+              </>}
+            </div>}
             {loading ? <div className="state-panel loading-state"><LoaderCircle className="spin" size={27} /><p>Reading your audience signals<span>Finding brands with a natural fit.</span></p></div>
               : error ? <div className="state-panel error-state"><CircleAlert size={24} /><h3>Couldn’t find matches</h3><p>{error}</p><span>Check the server’s Qloo configuration and try again.</span></div>
-                : hasSearched && brands.length === 0 ? <div className="state-panel"><div className="empty-mark"><Search size={23} /></div><h3>No matches this time</h3><p>Try broadening your {role === 'brand' ? 'product or style keywords' : 'content description'} or changing the location.</p></div>
-                  : hasSearched ? <div className="brand-list">{brands.map((brand, index) => role === 'brand'
+                : hasSearched && visibleBrands.length === 0 ? <div className="state-panel"><div className="empty-mark"><Search size={23} /></div><h3>No matches this time</h3><p>Try broadening your search or adjusting the filters.</p></div>
+                  : hasSearched ? <div className="brand-list">{visibleBrands.map((brand, index) => role === 'brand'
                     ? <InfluencerCard key={brand.entity_id || brand.id || `${brand.name}-${index}`} person={brand} index={index} />
                     : <BrandCard key={brand.entity_id || brand.id || `${brand.name}-${index}`} brand={brand} index={index} />)}</div>
                     : <div className="results-empty"><div className="orbit-art" aria-hidden="true"><span className="orbit orbit-one" /><span className="orbit orbit-two" /><span className="orbit-core"><Sparkles size={23} /></span><span className="orbit-node node-one" /><span className="orbit-node node-two" /><span className="orbit-node node-three" /></div><span className="empty-overline">A BETTER KIND OF COLLABORATION</span><h3>Good partnerships<br />feel <em>inevitable.</em></h3><p>{role === 'brand' ? 'Add your product, creator style, and target audience to find people who match.' : 'Set your creator signals and we’ll surface brands with an audience affinity to match.'}</p><div className="signal-tags"><span><Users size={13} /> Audience</span><span><Building2 size={13} /> {role === 'brand' ? 'Creator fit' : 'Brand fit'}</span><span><MapPin size={13} /> Place</span></div></div>}
-            {hasSearched && brands.length > 0 && <p className="results-footnote">Affinity scores reflect audience alignment, not a guarantee of partnership.</p>}
+            {hasSearched && (filteredBrands.length > 0 || hasMoreResults) && <div className="results-pagination">
+              <span>Page {visiblePage + 1} of {pageCount}{loadingMore ? ' · Loading more results…' : ''}</span>
+              <div><button type="button" onClick={() => changeResultPage(visiblePage - 1)} disabled={visiblePage === 0 || loadingMore}>Previous</button><button type="button" onClick={() => changeResultPage(visiblePage + 1)} disabled={loadingMore || (visiblePage >= pageCount - 1 && !hasMoreResults)}>Next</button></div>
+            </div>}
+            {hasSearched && filteredBrands.length > 0 && <p className="results-footnote">Affinity scores reflect audience alignment, not a guarantee of partnership.</p>}
           </section>
         </div>
         </>}
