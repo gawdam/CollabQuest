@@ -4,6 +4,31 @@ import express from 'express'
 const app = express()
 const port = Number(process.env.PORT) || 3001
 const qlooBaseUrl = 'https://hackathon.api.qloo.com/v2'
+const supportedAgeRanges = new Set([
+  '24_and_younger',
+  '25_to_29',
+  '30_to_34',
+  '35_to_44',
+  '45_to_54',
+  '55_and_older',
+])
+const supportedCreatorTags = new Set([
+  'urn:tag:genre:person:academic',
+  'urn:tag:genre:person:activist',
+  'urn:tag:genre:person:actor',
+  'urn:tag:genre:person:athlete',
+  'urn:tag:genre:person:author',
+  'urn:tag:genre:person:chef',
+  'urn:tag:genre:person:comedian',
+  'urn:tag:genre:person:fashion_designer',
+  'urn:tag:genre:person:influencer',
+  'urn:tag:genre:person:journalist',
+  'urn:tag:genre:person:lawyer',
+  'urn:tag:genre:person:model',
+  'urn:tag:genre:person:musician',
+  'urn:tag:genre:person:politician',
+  'urn:tag:genre:person:youtuber',
+])
 
 app.use(express.json({ limit: '20kb' }))
 
@@ -80,25 +105,24 @@ app.post('/api/recommendations', async (request, response) => {
 
 app.post('/api/influencers', async (request, response) => {
   const {
-    product, style = '', location, ageMin, ageMax, gender = 'any',
+    product, location, ageRanges, creatorTags: selectedCreatorTags = [], gender = 'any',
     popularityTier, creatorType = 'both', page = 1,
   } = request.body || {}
-  const minimumAge = Number(ageMin)
-  const maximumAge = Number(ageMax)
   const tierIndex = Number(popularityTier)
   const resultPage = Number(page)
   if (
     typeof product !== 'string' || !product.trim()
-    || typeof style !== 'string'
     || typeof location !== 'string' || !location.trim()
-    || !Number.isInteger(minimumAge) || !Number.isInteger(maximumAge)
-    || minimumAge < 18 || maximumAge > 100 || minimumAge >= maximumAge
+    || !Array.isArray(ageRanges) || ageRanges.length === 0
+    || ageRanges.some((ageRange) => !supportedAgeRanges.has(ageRange))
+    || !Array.isArray(selectedCreatorTags)
+    || selectedCreatorTags.some((tag) => typeof tag !== 'string' || !supportedCreatorTags.has(tag))
     || !['female', 'male', 'any'].includes(gender)
     || !Number.isInteger(tierIndex) || tierIndex < 0 || tierIndex > 3
     || !['instagrammers', 'youtubers', 'both'].includes(creatorType)
     || !Number.isInteger(resultPage) || resultPage < 1
   ) {
-    return response.status(400).json({ error: 'Add a product, location, valid age range, gender, and popularity tier.' })
+    return response.status(400).json({ error: 'Add a product, location, at least one valid age group, gender, and popularity tier.' })
   }
 
   const apiKey = process.env.QLOO_API_KEY
@@ -114,11 +138,7 @@ app.post('/api/influencers', async (request, response) => {
       const tagData = await qlooGet('tags', tagParams, apiKey)
       return (tagData.results?.tags || []).map((tag) => tag.id).filter(Boolean)
     }
-    const tagGroups = await Promise.all([
-      resolveTags(product.trim()),
-      ...(style.trim() ? [resolveTags(style.trim())] : []),
-    ])
-    const tagUrns = [...new Set(tagGroups.flat())]
+    const tagUrns = [...new Set(await resolveTags(product.trim()))]
 
     const tier = [
       { min: 0.1, max: 0.3 },
@@ -127,19 +147,21 @@ app.post('/api/influencers', async (request, response) => {
       { min: 0.7 },
     ][tierIndex]
     const batchTake = 50
-    const creatorTags = [
+    const creatorTypeTags = [
       { type: 'influencer', urn: 'urn:tag:genre:person:influencer' },
       { type: 'youtuber', urn: 'urn:tag:genre:person:youtuber' },
     ].filter(({ type }) => creatorType === 'both'
       || (creatorType === 'youtubers' ? type === 'youtuber' : type === 'influencer'))
-    const requests = creatorTags.map(async ({ type, urn }) => {
+    const selectedAgeRanges = [...new Set(ageRanges)]
+    const requests = creatorTypeTags.flatMap(({ type, urn }) => selectedAgeRanges.map(async (ageRange) => {
       const insightParams = new URLSearchParams({
         'filter.type': 'urn:entity:person',
         'operator.signal.interests.tags': 'union',
         'signal.location.query': location.trim(),
-        'signal.interests.tags': [...tagUrns, urn].join(','),
-        'filter.demographics.age_min': String(minimumAge),
-        'filter.demographics.age_max': String(maximumAge),
+        'signal.interests.tags': tagUrns.join(','),
+        'operator.filter.tags': 'union',
+        'filter.tags': [...new Set([urn, ...selectedCreatorTags])].join(','),
+        'signal.demographics.age': ageRange,
         'filter.popularity.min': String(tier.min),
         page: String(resultPage),
         take: String(batchTake),
@@ -148,7 +170,7 @@ app.post('/api/influencers', async (request, response) => {
       if (gender !== 'any') insightParams.set('filter.demographics.gender', gender)
       const data = await qlooGet('insights/', insightParams, apiKey)
       return { type, entities: data.results?.entities || [] }
-    })
+    }))
 
     const sourceResults = await Promise.all(requests)
     const entities = []

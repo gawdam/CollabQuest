@@ -1,13 +1,32 @@
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import { ArrowDownWideNarrow, ArrowLeft, ArrowUpRight, AtSign, Building2, CircleAlert, Globe, Link2, LoaderCircle, MapPin, Search, Sparkles, Users } from 'lucide-react'
 import './App.css'
 
 const categories = ['Travel', 'Beauty', 'Fashion', 'Fitness', 'Food', 'Gaming', 'Lifestyle', 'Technology', 'Wellness']
-const popularityTiers = [
-  { label: '$', range: '0.1–0.3', min: 0.1, max: 0.3 },
-  { label: '$$', range: '0.3–0.5', min: 0.3, max: 0.5 },
-  { label: '$$$', range: '0.5–0.7', min: 0.5, max: 0.7 },
-  { label: '$$$$', range: '0.7+', min: 0.7 },
+const ageRanges = [
+  { value: '24_and_younger', label: 'Young Gen Z (under 25)' },
+  { value: '25_to_29', label: 'Late Gen Z (25–29)' },
+  { value: '30_to_34', label: 'Young Millennials (30–34)' },
+  { value: '35_to_44', label: 'Late Millennials (35–44)' },
+  { value: '45_to_54', label: 'Generation X (45–54)' },
+  { value: '55_and_older', label: 'Baby Boomers (55 and older)' },
+]
+const creatorTags = [
+  { label: 'Academic', urn: 'urn:tag:genre:person:academic' },
+  { label: 'Activist', urn: 'urn:tag:genre:person:activist' },
+  { label: 'Actor', urn: 'urn:tag:genre:person:actor' },
+  { label: 'Athlete', urn: 'urn:tag:genre:person:athlete' },
+  { label: 'Author', urn: 'urn:tag:genre:person:author' },
+  { label: 'Chef', urn: 'urn:tag:genre:person:chef' },
+  { label: 'Comedian', urn: 'urn:tag:genre:person:comedian' },
+  { label: 'Fashion Designer', urn: 'urn:tag:genre:person:fashion_designer' },
+  { label: 'Influencer', urn: 'urn:tag:genre:person:influencer' },
+  { label: 'Journalist', urn: 'urn:tag:genre:person:journalist' },
+  { label: 'Lawyer', urn: 'urn:tag:genre:person:lawyer' },
+  { label: 'Model', urn: 'urn:tag:genre:person:model' },
+  { label: 'Musician', urn: 'urn:tag:genre:person:musician' },
+  { label: 'Politician', urn: 'urn:tag:genre:person:politician' },
+  { label: 'YouTuber', urn: 'urn:tag:genre:person:youtuber' },
 ]
 const initialForm = {
   ageRange: '25_to_29', gender: 'male',
@@ -15,7 +34,7 @@ const initialForm = {
   location: 'London', followers: 85000, category: 'Travel',
 }
 const initialInfluencerForm = {
-  product: '', style: '', location: 'Bangalore', ageMin: 20, ageMax: 35, gender: 'female', popularityTier: 2,
+  product: '', location: 'London', ageRanges: ['30_to_34'], creatorTags: [], gender: 'Any', popularityTier: 2,
 }
 
 async function getRecommendations(endpoint, request) {
@@ -161,7 +180,6 @@ function InfluencerCard({ person, index }) {
         {imageUrl ? <img src={imageUrl} alt="" /> : <span>{name.slice(0, 1).toUpperCase()}</span>}
       </span>
       <span className="brand-copy">
-        <span className="brand-rank">CREATOR {String(index + 1).padStart(2, '0')}</span>
         <span className="brand-name">{name}<span className="creator-platforms">{creatorTypes.map((type) => type === 'youtuber'
           ? <span className="creator-platform youtube-platform" key={type} aria-label="YouTube" title="YouTube"><svg viewBox="0 0 24 18" aria-hidden="true"><path d="M23.5 2.8a3 3 0 0 0-2.1-2.1C19.5.2 12 .2 12 .2s-7.5 0-9.4.5A3 3 0 0 0 .5 2.8 31 31 0 0 0 0 9s0 3.4.5 6.2a3 3 0 0 0 2.1 2.1c1.9.5 9.4.5 9.4.5s7.5 0 9.4-.5a3 3 0 0 0 2.1-2.1A31 31 0 0 0 24 9s0-3.4-.5-6.2Z" /><path className="platform-play" d="m9.6 12.8 6.2-3.8-6.2-3.8z" /></svg></span>
           : <span className="creator-platform instagram-platform" key={type} aria-label="Instagram" title="Instagram"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2" y="2" width="16" height="16" rx="4" /><circle cx="10" cy="10" r="3.5" /><circle className="instagram-dot" cx="14.8" cy="5.4" r="1" /></svg></span>)}</span></span>
@@ -179,7 +197,6 @@ function InfluencerCard({ person, index }) {
 }
 
 function App() {
-  const activeAgeHandle = useRef(null)
   const [role, setRole] = useState(null)
   const [form, setForm] = useState(initialForm)
   const [influencerForm, setInfluencerForm] = useState(initialInfluencerForm)
@@ -205,40 +222,37 @@ function App() {
     const { name, value } = event.target
     setInfluencerForm((current) => ({
       ...current,
-      [name]: ['ageMin', 'ageMax', 'popularityTier'].includes(name) ? Number(value) : value,
+      [name]: name === 'popularityTier' ? Number(value) : value,
     }))
   }
 
-  function updateAgeHandle(handle, value) {
-    setInfluencerForm((current) => handle === 'ageMin'
-      ? { ...current, ageMin: Math.min(value, current.ageMax - 1) }
-      : { ...current, ageMax: Math.max(value, current.ageMin + 1) })
+  function toggleAgeRange(value) {
+    setInfluencerForm((current) => ({
+      ...current,
+      ageRanges: current.ageRanges.includes(value)
+        ? current.ageRanges.filter((ageRange) => ageRange !== value)
+        : [...current.ageRanges, value],
+    }))
   }
 
-  function handleAgeTrackPointerDown(event) {
-    if (event.target instanceof HTMLInputElement) return
-    const bounds = event.currentTarget.getBoundingClientRect()
-    const age = Math.round(18 + Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)) * 47)
-    const handle = Math.abs(age - influencerForm.ageMin) <= Math.abs(age - influencerForm.ageMax) ? 'ageMin' : 'ageMax'
-    activeAgeHandle.current = handle
-    event.currentTarget.setPointerCapture(event.pointerId)
-    updateAgeHandle(handle, age)
-  }
-
-  function handleAgeTrackPointerMove(event) {
-    if (!activeAgeHandle.current) return
-    const bounds = event.currentTarget.getBoundingClientRect()
-    const age = Math.round(18 + Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)) * 47)
-    updateAgeHandle(activeAgeHandle.current, age)
-  }
-
-  function handleAgeTrackPointerUp(event) {
-    activeAgeHandle.current = null
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+  function toggleCreatorTag(urn) {
+    setInfluencerForm((current) => ({
+      ...current,
+      creatorTags: current.creatorTags.includes(urn)
+        ? current.creatorTags.filter((tag) => tag !== urn)
+        : [...current.creatorTags, urn],
+    }))
   }
 
   async function handleSubmit(event) {
     event.preventDefault()
+    if (role === 'brand' && influencerForm.ageRanges.length === 0) {
+      setError('Select at least one age group.')
+      setHasSearched(true)
+      setBrands([])
+      setHasMoreResults(false)
+      return
+    }
     setLoading(true)
     setError('')
     try {
@@ -267,9 +281,6 @@ function App() {
 
   const followerLabel = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(form.followers)
   const creatorTier = form.followers < 10000 ? 'Nano creator' : form.followers < 50000 ? 'Micro creator' : form.followers < 100000 ? 'Mid-tier creator' : form.followers < 500000 ? 'Macro creator' : form.followers < 1000000 ? 'Top creator' : 'Celebrity creator'
-  const selectedPopularity = popularityTiers[influencerForm.popularityTier]
-  const ageMinFraction = (influencerForm.ageMin - 18) / 47
-  const ageMaxRightFraction = (65 - influencerForm.ageMax) / 47
 
   function chooseRole(nextRole) {
     setRole(nextRole)
@@ -384,27 +395,57 @@ function App() {
             <div className="panel-heading"><div><span className="section-kicker">{role === 'brand' ? 'YOUR CAMPAIGN' : 'YOUR PROFILE'}</span><h2 className={role === 'brand' ? 'preserve-font-size' : ''}>{role === 'brand' ? 'Find creators' : 'Build a brief'}</h2></div><span className="step-count">01 <span>/ 01</span></span></div>
             <form onSubmit={handleSubmit}>
               {role === 'brand' ? <>
-                <fieldset className="field-group"><legend>Product &amp; style</legend>
+                <fieldset className="field-group"><legend>Product</legend>
                   <label className="field"><span>What product are you promoting?</span><input name="product" value={influencerForm.product} onChange={updateInfluencerField} placeholder="e.g. sneakers" required /></label>
-                  <label className="field location-field"><span>Creator style (optional)</span><input name="style" value={influencerForm.style} onChange={updateInfluencerField} placeholder="e.g. streetwear, minimalist" /></label>
                 </fieldset>
-                <fieldset className="field-group"><legend>Creator audience</legend>
+                <fieldset className="field-group"><legend>Audience</legend>
                   <div className="field-pair">
                     <label className="field"><span>Gender</span><select name="gender" value={influencerForm.gender} onChange={updateInfluencerField}><option value="female">Female</option><option value="male">Male</option><option value="any">Any</option></select></label>
                     <label className="field"><span>Location</span><span className="input-with-icon"><MapPin size={16} /><input name="location" value={influencerForm.location} onChange={updateInfluencerField} placeholder="City or region" required /></span></label>
                   </div>
-                  <div className="range-heading"><span>Age range</span><strong>{influencerForm.ageMin}–{influencerForm.ageMax}</strong></div>
-                  <div className="dual-range" onPointerDown={handleAgeTrackPointerDown} onPointerMove={handleAgeTrackPointerMove} onPointerUp={handleAgeTrackPointerUp} onPointerCancel={handleAgeTrackPointerUp}>
-                    <div className="dual-range-track"><span style={{ left: `calc(${ageMinFraction * 100}% + ${7 - ageMinFraction * 14}px)`, right: `calc(${ageMaxRightFraction * 100}% + ${7 - ageMaxRightFraction * 14}px)` }} /></div>
-                    <input type="range" name="ageMin" min="18" max="65" step="1" value={influencerForm.ageMin} onChange={(event) => updateAgeHandle('ageMin', Number(event.target.value))} aria-label="Minimum influencer age" />
-                    <input type="range" name="ageMax" min="18" max="65" step="1" value={influencerForm.ageMax} onChange={(event) => updateAgeHandle('ageMax', Number(event.target.value))} aria-label="Maximum influencer age" />
-                  </div>
-                  <div className="range-labels"><span>18</span><span>65</span></div>
+                  <fieldset className="generation-filter">
+                    <legend>Generations</legend>
+                    <div className="generation-options">
+                      {ageRanges.map(({ value, label }) => (
+                        <button
+                          className={`creator-tag${influencerForm.ageRanges.includes(value) ? ' is-selected' : ''}`}
+                          type="button"
+                          key={value}
+                          aria-pressed={influencerForm.ageRanges.includes(value)}
+                          onClick={() => toggleAgeRange(value)}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </fieldset>
                 </fieldset>
-                <fieldset className="field-group popularity-group"><legend>Budget / popularity</legend>
-                  <div className="popularity-readout"><strong>{selectedPopularity.label}</strong><span>{selectedPopularity.range}</span></div>
-                  <input className="follower-slider popularity-slider" type="range" name="popularityTier" min="0" max="3" step="1" value={influencerForm.popularityTier} onChange={updateInfluencerField} aria-label="Creator popularity and budget tier" />
-                  <div className="range-labels popularity-labels">{popularityTiers.map((tier) => <span key={tier.label}>{tier.label}</span>)}</div>
+                <fieldset className="field-group creator-group">
+                  <legend>Creator</legend>
+                  <fieldset className="creator-tag-filter">
+                    <legend>Category</legend>
+                    <div className="creator-tag-options">
+                      {creatorTags.map(({ label, urn }) => {
+                        const isSelected = influencerForm.creatorTags.includes(urn)
+                        return (
+                          <button
+                            className={`creator-tag${isSelected ? ' is-selected' : ''}`}
+                            type="button"
+                            key={urn}
+                            aria-pressed={isSelected}
+                            onClick={() => toggleCreatorTag(urn)}
+                          >
+                            {label}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </fieldset>
+                  <fieldset className="budget-filter">
+                    <legend>Budget</legend>
+                    <input className="follower-slider" type="range" name="popularityTier" min="0" max="3" step="1" value={influencerForm.popularityTier} onChange={updateInfluencerField} aria-label="Budget" />
+                    <div className="range-labels budget-labels" aria-hidden="true"><span>$</span><span>$$</span><span>$$$</span><span>$$$$</span></div>
+                  </fieldset>
                 </fieldset>
               </> : <>
                 <fieldset className="field-group"><legend>Audience</legend><div className="field-pair">
@@ -423,7 +464,7 @@ function App() {
             {hasSearched && <div className="results-filters">
               <label className="result-filter search-filter"><span>Search</span><span className="input-with-icon"><Search size={15} /><input value={resultSearch} onChange={(event) => { setResultSearch(event.target.value); setResultPage(0) }} placeholder={role === 'brand' ? 'Search creators' : 'Search brands'} /></span></label>
               {role === 'brand' && <>
-                <label className="result-filter"><span>Creator type</span><select value={creatorType} onChange={(event) => { setCreatorType(event.target.value); setResultPage(0) }}><option value="both">YouTubers + Instagrammers</option><option value="youtubers">YouTubers</option><option value="instagrammers">Instagrammers</option></select></label>
+                <label className="result-filter"><span>Creator type</span><select value={creatorType} onChange={(event) => { setCreatorType(event.target.value); setResultPage(0) }}><option value="both">All</option><option value="youtubers">YouTubers</option><option value="instagrammers">Instagrammers</option></select></label>
                 <label className="result-filter"><span>Country</span><select value={countryFilter} onChange={(event) => { setCountryFilter(event.target.value); setResultPage(0) }}><option value="">All countries</option>{countries.map((country) => <option key={country} value={country}>{country}</option>)}</select></label>
                 <label className="result-filter"><span>Gender</span><select value={genderFilter} onChange={(event) => { setGenderFilter(event.target.value); setResultPage(0) }}><option value="">Any gender</option><option value="female">Female</option><option value="male">Male</option><option value="non-binary">Non-binary</option></select></label>
               </>}
