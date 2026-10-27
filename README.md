@@ -15,14 +15,17 @@ you are an influencer looking for a brand or a brand looking for an influencer.
 3. Run `npm run dev` and open the URL printed by Vite.
 
 The development command runs both the Vite client and the Express API server.
-The client sends searches to the local server, which keeps the Qloo API key out
-of browser code and proxies the requests to Qloo.
+For local development, the client can use the server-side key from `.env`.
+Alternatively, enter your own Qloo API key in the app to send requests directly
+from the browser. The key stays in page memory, is sent in the Qloo request
+header, and is not stored or included in the built client.
 For creator searches, the server uses Puppeteer to retrieve public Instagram
 follower counts and an estimated median engagement rate from the latest nine
 posts. Per-post engagement rate is calculated as (likes + comments) / followers;
 the displayed rate is the median of posts with available counts. Instagram may
 round these public counts or limit profile access, so metrics can be approximate
-or unavailable.
+or unavailable. These Instagram metrics are only available when searches use
+the server; direct browser searches on GitHub Pages show metrics as unavailable.
 Puppeteer installs a compatible browser as part of setup.
 Creator recommendations use only the selected creator categories; Influencer is
 selected by default and is used as the fallback if all categories are cleared.
@@ -31,34 +34,18 @@ cart. Begin outreach opens a card-only view for the selected creators.
 
 ## Deployment
 
-Both discovery flows need the Express API server as well as the static client.
-GitHub Pages hosts only the client; it cannot run the `/api` routes or keep a
-Qloo key secret. The repository includes a Render Blueprint in `render.yaml`
-to deploy the API separately.
-
-1. In Render, create a new Blueprint from this repository and deploy the
-   `collabquest-api` service.
-2. Set `QLOO_API_KEY` in the Render service's environment settings. The
-   Blueprint prompts for this value; it is deliberately not stored in the
-   repository.
-3. Keep `FRONTEND_ORIGIN` set to `https://gawdam.github.io` on the Render
-   service so the API accepts requests from the GitHub Pages site.
-4. After the API is healthy at `https://<your-render-service>.onrender.com`,
-   add a repository Actions variable named `VITE_API_BASE_URL` with that full
-   HTTPS URL (no trailing slash). Go to **Settings → Secrets and variables →
-   Actions → Variables**.
-5. In **Settings → Pages**, choose **GitHub Actions** as the deployment
-   source. Push to the default branch or manually run the Pages workflow.
-
-The Pages build uses `VITE_API_BASE_URL` for API requests. This variable is
-public and should contain only the Render service URL. Never put `QLOO_API_KEY`
-in a `VITE_*` variable, the frontend, or a GitHub Pages build secret: client
-build values are visible to everyone. Store the Qloo key only in Render's
-server environment.
+The Express API server is optional when visitors provide their own Qloo API
+keys. In that mode, searches are sent directly from each visitor's browser to
+Qloo; the visitor's key is visible to them in their browser's network tools and
+is not shared with the site. Qloo must allow browser cross-origin requests from
+the Pages domain for direct searches to work. Without that support, host the
+Express server separately and route `/api` requests to it instead.
 
 ## Deploy to GitHub Pages
 
 The GitHub Actions workflow in `.github/workflows/deploy.yml` builds and deploys the app to GitHub Pages whenever changes are pushed to the default branch. In the repository's **Settings → Pages**, set the build and deployment source to **GitHub Actions**. The workflow automatically configures the correct base path for project pages and user or organization pages.
 
-The development server continues to proxy `/api` to the local Express server,
-so no `VITE_API_BASE_URL` is needed for local development.
+GitHub Pages hosts the static client. Visitors can run searches by entering
+their own Qloo API key in the app; no shared key is needed in GitHub Actions or
+the published client. Direct searches do not include the server-only Instagram
+metrics enrichment.

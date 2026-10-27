@@ -5,9 +5,6 @@ import puppeteer from 'puppeteer'
 const app = express()
 const port = Number(process.env.PORT) || 3001
 const qlooBaseUrl = 'https://hackathon.api.qloo.com/v2'
-const allowedFrontendOrigins = new Set(
-  (process.env.FRONTEND_ORIGIN || '').split(',').map((origin) => origin.trim()).filter(Boolean),
-)
 const supportedAgeRanges = new Set([
   '24_and_younger',
   '25_to_29',
@@ -34,28 +31,7 @@ const supportedCreatorTags = new Set([
   'urn:tag:genre:person:youtuber',
 ])
 
-app.use((request, response, next) => {
-  const origin = request.get('origin')
-  const isLocalDevelopmentOrigin = process.env.NODE_ENV !== 'production'
-    && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin || '')
-
-  if (origin && !allowedFrontendOrigins.has(origin) && !isLocalDevelopmentOrigin) {
-    return response.status(403).json({ error: 'This origin is not allowed to access the API.' })
-  }
-
-  if (origin) {
-    response.setHeader('Access-Control-Allow-Origin', origin)
-    response.setHeader('Vary', 'Origin')
-    response.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
-    response.setHeader('Access-Control-Allow-Headers', 'Content-Type')
-  }
-  if (request.method === 'OPTIONS') return response.sendStatus(204)
-  return next()
-})
-
 app.use(express.json({ limit: '20kb' }))
-
-app.get('/health', (_request, response) => response.json({ status: 'ok' }))
 
 function getPopularityRange(followerCount) {
   if (followerCount < 10000) return [0, 0.2]

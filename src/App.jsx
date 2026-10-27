@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDownWideNarrow, ArrowLeft, ArrowUpRight, AtSign, Building2, Check, CircleAlert, Copy, MapPin, Search, Sparkles, Users } from 'lucide-react'
+import { ArrowDownWideNarrow, ArrowLeft, ArrowUpRight, AtSign, Building2, Check, CircleAlert, Copy, Eye, EyeOff, MapPin, Search, Sparkles, Users } from 'lucide-react'
 import './App.css'
 
-const apiBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/+$/, '') || ''
 const categories = ['Travel', 'Beauty', 'Fashion', 'Fitness', 'Food', 'Gaming', 'Lifestyle', 'Technology', 'Wellness']
 const ageRanges = [
   { value: '24_and_younger', label: 'Young Gen Z (under 25)' },
@@ -184,8 +183,106 @@ function readOutreachInfluencers() {
   }
 }
 
-async function getRecommendations(endpoint, request) {
-  const response = await fetch(`${apiBaseUrl}${endpoint}`, {
+async function qlooGet(path, params, apiKey) {
+  const url = new URL(`https://hackathon.api.qloo.com/v2/${path}`)
+  url.search = params.toString()
+  const response = await fetch(url, {
+    headers: { 'X-Api-Key': apiKey, accept: 'application/json' },
+  })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(data.message || data.error || `Qloo request failed (${response.status})`)
+  return data
+}
+
+async function getDirectRecommendations(endpoint, request, apiKey) {
+  if (endpoint === '/api/recommendations') {
+    const tagsParams = new URLSearchParams({
+      'feature.typo_tolerance': 'true',
+      'filter.query': `${request.category || ''} ${request.description}`.trim(),
+      'feature.semantic_search': 'true',
+      page: '1',
+      take: '10',
+    })
+    const tagsData = await qlooGet('tags', tagsParams, apiKey)
+    const tagUrns = (tagsData.results?.tags || []).map((tag) => tag.id).filter(Boolean)
+    if (!tagUrns.length) return { entities: [], hasMore: false }
+
+    const [popularityMin, popularityMax] = Number(request.followers) < 10000
+      ? [0, 0.2]
+      : Number(request.followers) < 50000
+        ? [0.2, 0.4]
+        : Number(request.followers) < 100000
+          ? [0.4, 0.7]
+          : Number(request.followers) < 500000
+            ? [0.7, 0.85]
+            : Number(request.followers) < 1000000
+              ? [0.85, 0.95]
+              : [0.95, 1]
+    const insightsParams = new URLSearchParams({
+      'filter.type': 'urn:entity:brand',
+      'signal.demographics.age': request.ageRange,
+      'signal.interests.tags': tagUrns.join(','),
+      'signal.location.query': request.location.trim(),
+      'filter.popularity.min': String(popularityMin),
+      'filter.popularity.max': String(popularityMax),
+      page: String(request.page || 1),
+      take: '50',
+    })
+    if (request.gender && request.gender !== 'any') insightsParams.set('signal.demographics.gender', request.gender)
+    const data = await qlooGet('insights/', insightsParams, apiKey)
+    return { entities: data.results?.entities || [], hasMore: false }
+  }
+
+  const tagsParams = new URLSearchParams({
+    'filter.query': request.product.trim(),
+    'feature.semantic_search': 'true',
+    take: '5',
+  })
+  const tagsData = await qlooGet('tags', tagsParams, apiKey)
+  const tagUrns = [...new Set((tagsData.results?.tags || []).map((tag) => tag.id).filter(Boolean))]
+  const tiers = [
+    { min: 0.1, max: 0.3 },
+    { min: 0.3, max: 0.5 },
+    { min: 0.5, max: 0.7 },
+    { min: 0.7 },
+  ]
+  const tier = tiers[Number(request.popularityTier)]
+  const creatorTags = [...new Set(request.creatorTags.length
+    ? request.creatorTags
+    : ['urn:tag:genre:person:influencer'])]
+  const requests = request.ageRanges.map(async (ageRange) => {
+    const params = new URLSearchParams({
+      'filter.type': 'urn:entity:person',
+      'operator.signal.interests.tags': 'union',
+      'signal.location.query': request.location.trim(),
+      'signal.interests.tags': tagUrns.join(','),
+      'operator.filter.tags': 'union',
+      'filter.tags': creatorTags.join(','),
+      'signal.demographics.age': ageRange,
+      'filter.popularity.min': String(tier.min),
+      page: String(request.page || 1),
+      take: '50',
+    })
+    if (tier.max !== undefined) params.set('filter.popularity.max', String(tier.max))
+    if (request.gender !== 'any') params.set('filter.demographics.gender', request.gender)
+    const data = await qlooGet('insights/', params, apiKey)
+    return data.results?.entities || []
+  })
+  const sourceResults = await Promise.all(requests)
+  const seen = new Set()
+  const entities = sourceResults.flat().filter((entity) => {
+    const id = entity.entity_id || entity.id || entity.name
+    if (!id || seen.has(id)) return false
+    seen.add(id)
+    return true
+  })
+  return { entities, hasMore: sourceResults.some((results) => results.length === 50) }
+}
+
+async function getRecommendations(endpoint, request, apiKey) {
+  if (apiKey) return getDirectRecommendations(endpoint, request, apiKey)
+
+  const response = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
@@ -391,6 +488,8 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [loadingMessageIndex, setLoadingMessageIndex] = useState(0)
   const [error, setError] = useState('')
+  const [qlooApiKey, setQlooApiKey] = useState('')
+  const [showQlooApiKey, setShowQlooApiKey] = useState(false)
   const loadingMessages = role === 'brand'
     ? ['Sending query to Qloo API', 'Finding influencers with a natural fit', 'Fetching Instagram metrics']
     : ['Sending query to Qloo API', 'Finding brands with a natural fit', 'Preparing your matches']
@@ -507,6 +606,13 @@ function App() {
 
   async function handleSubmit(event) {
     event.preventDefault()
+    if (!qlooApiKey.trim() && import.meta.env.PROD) {
+      setError('Enter your Qloo API key to search. Your key is used only for direct requests from this browser.')
+      setHasSearched(true)
+      setBrands([])
+      setHasMoreResults(false)
+      return
+    }
     if (role === 'brand' && influencerForm.ageRanges.length === 0) {
       setError('Select at least one age group.')
       setHasSearched(true)
@@ -525,6 +631,7 @@ function App() {
       const { entities, hasMore } = await getRecommendations(
         isBrand ? '/api/influencers' : '/api/recommendations',
         request,
+        qlooApiKey.trim(),
       )
       setBrands(entities.sort((a, b) => Number(b.query?.affinity ?? 0) - Number(a.query?.affinity ?? 0)))
       setResultPage(0)
@@ -613,6 +720,7 @@ function App() {
           isBrand
             ? { ...influencerForm, popularityTier: Number(influencerForm.popularityTier), page }
             : { ...form, page },
+          qlooApiKey.trim(),
         )
         setBrands((current) => {
           const seen = new Set(current.map((entity) => entity.entity_id || entity.id || entity.name))
@@ -757,6 +865,24 @@ function App() {
           <aside className="brief-panel">
             <div className="panel-heading"><div><span className="section-kicker">{role === 'brand' ? 'YOUR CAMPAIGN' : 'YOUR PROFILE'}</span><h2 className={role === 'brand' ? 'preserve-font-size' : ''}>{role === 'brand' ? 'Find creators' : 'Build a brief'}</h2></div><span className="step-count">01 <span>/ 01</span></span></div>
             <form onSubmit={handleSubmit}>
+              <fieldset className="field-group api-key-group">
+                <legend>Your Qloo API key</legend>
+                <label className="field"><span>API key</span><span className="api-key-control">
+                  <input
+                    name="qlooApiKey"
+                    type={showQlooApiKey ? 'text' : 'password'}
+                    value={qlooApiKey}
+                    onChange={(event) => setQlooApiKey(event.target.value)}
+                    autoComplete="off"
+                    placeholder="Enter your personal API key"
+                    aria-label="Your Qloo API key"
+                  />
+                  <button className="api-key-toggle" type="button" onClick={() => setShowQlooApiKey((visible) => !visible)} aria-label={showQlooApiKey ? 'Hide API key' : 'Show API key'} title={showQlooApiKey ? 'Hide API key' : 'Show API key'}>
+                    {showQlooApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </span></label>
+                <p className="api-key-note">Sent directly to Qloo from your browser. It is not saved or included in the site build.</p>
+              </fieldset>
               {role === 'brand' ? <>
                 <fieldset className="field-group"><legend>Product</legend>
                   <label className="field"><span>What product are you promoting?</span><input name="product" value={influencerForm.product} onChange={updateInfluencerField} placeholder="e.g. sneakers" required /></label>
