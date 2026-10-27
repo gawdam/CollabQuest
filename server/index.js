@@ -1,5 +1,6 @@
 import 'dotenv/config'
 import express from 'express'
+import puppeteer from 'puppeteer'
 
 const app = express()
 const port = Number(process.env.PORT) || 3001
@@ -54,6 +55,155 @@ async function qlooGet(path, params, apiKey) {
   return data
 }
 
+function getInstagramUsername(entry) {
+  const profile = Array.isArray(entry) ? entry[0] : entry
+  if (!profile) return null
+
+  const value = typeof profile === 'string'
+    ? profile
+    : profile.url || profile.href || profile.username || profile.handle || profile.id || profile.value
+  if (typeof value !== 'string' || !value.trim()) return null
+
+  const normalized = value.trim().replace(/^@/, '')
+  let username = normalized
+  if (/^https?:\/\//i.test(normalized)) {
+    try {
+      const url = new URL(normalized)
+      if (!['instagram.com', 'www.instagram.com'].includes(url.hostname.toLowerCase())) return null
+      username = url.pathname.split('/').filter(Boolean)[0] || ''
+    } catch {
+      return null
+    }
+  }
+
+  if (!/^[A-Za-z0-9._]+$/.test(username) || /^(accounts|about|developer|direct|explore|legal|p|reel|reels|stories)$/i.test(username)) {
+    return null
+  }
+  return username
+}
+
+function parseInstagramFollowerCount(content) {
+  const match = content.match(/([\d.,]+)\s*([KkMmBb]?)\s+Followers/i)
+  if (!match) return null
+
+  return parseInstagramCount(match[1], match[2])
+}
+
+function parseInstagramCount(value, suffix = '') {
+  const count = Number(value.replace(/,/g, ''))
+  const multiplier = { '': 1, k: 1_000, m: 1_000_000, b: 1_000_000_000 }[suffix.toLowerCase()]
+  return Number.isFinite(count) ? Math.round(count * multiplier) : null
+}
+
+function parseInstagramPostEngagement(content) {
+  const likesMatch = content.match(/([\d.,]+)\s*([KkMmBb]?)\s+likes?\b/i)
+  const commentsMatch = content.match(/([\d.,]+)\s*([KkMmBb]?)\s+comments?\b/i)
+  if (!likesMatch || !commentsMatch) return null
+
+  const likes = parseInstagramCount(likesMatch[1], likesMatch[2])
+  const comments = parseInstagramCount(commentsMatch[1], commentsMatch[2])
+  return likes === null || comments === null ? null : likes + comments
+}
+
+async function getInstagramMetrics(browser, username) {
+  const page = await browser.newPage()
+  try {
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+    await page.goto(`https://www.instagram.com/${username}/`, {
+      waitUntil: 'domcontentloaded',
+      timeout: 15000,
+    })
+    const profile = await page.evaluate((profileUsername) => {
+      const description = document.querySelector('meta[property="og:description"]')?.content || ''
+      const posts = [...document.querySelectorAll('a[href]')].flatMap((anchor) => {
+        const url = new URL(anchor.href)
+        const [linkedUsername, type, shortcode] = url.pathname.split('/').filter(Boolean)
+        return url.hostname.endsWith('instagram.com')
+          && linkedUsername?.toLowerCase() === profileUsername.toLowerCase()
+          && ['p', 'reel', 'tv'].includes(type)
+          && shortcode
+          ? [`https://www.instagram.com/${linkedUsername}/${type}/${shortcode}/`]
+          : []
+      })
+      return { description, posts: [...new Set(posts)] }
+    }, username)
+    const followers = parseInstagramFollowerCount(profile.description)
+    const postEngagements = []
+
+    for (const postUrl of profile.posts.slice(0, 9)) {
+      try {
+        await page.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 15000 })
+        const description = await page.evaluate(() =>
+          document.querySelector('meta[property="og:description"]')?.content
+          || document.querySelector('meta[name="description"]')?.content
+          || '',
+        )
+        const engagement = parseInstagramPostEngagement(description)
+        if (engagement !== null) postEngagements.push(engagement)
+      } catch (error) {
+        console.error(`Instagram post metrics lookup failed for @${username}:`, error)
+      }
+    }
+
+    const postEngagementRates = postEngagements
+      .map((engagement) => engagement / followers * 100)
+      .sort((first, second) => first - second)
+    const middleIndex = Math.floor(postEngagementRates.length / 2)
+    const engagementRate = followers && postEngagementRates.length
+      ? postEngagementRates.length % 2
+        ? postEngagementRates[middleIndex]
+        : (postEngagementRates[middleIndex - 1] + postEngagementRates[middleIndex]) / 2
+      : null
+    return { followers, engagementRate, engagementPostCount: postEngagements.length }
+  } finally {
+    await page.close()
+  }
+}
+
+async function addInstagramMetrics(entities) {
+  const entityUsernames = entities.map((entity) => getInstagramUsername(
+    entity.external?.instagram_username || entity.external?.instagram,
+  ))
+  const usernames = [...new Set(entityUsernames.filter(Boolean))]
+  const metricsByUsername = new Map()
+
+  if (usernames.length > 0) {
+    let browser
+    try {
+      browser = await puppeteer.launch({ headless: true })
+      for (let index = 0; index < usernames.length; index += 5) {
+        const batch = usernames.slice(index, index + 5)
+        const results = await Promise.all(batch.map(async (username) => {
+          try {
+            return [username, await getInstagramMetrics(browser, username)]
+          } catch (error) {
+            console.error(`Instagram metrics lookup failed for @${username}:`, error)
+            return [username, { followers: null, engagementRate: null, engagementPostCount: 0 }]
+          }
+        }))
+        for (const [username, metrics] of results) metricsByUsername.set(username, metrics)
+      }
+    } catch (error) {
+      console.error('Could not launch browser for Instagram metrics lookups:', error)
+      for (const username of usernames) {
+        metricsByUsername.set(username, { followers: null, engagementRate: null, engagementPostCount: 0 })
+      }
+    } finally {
+      if (browser) await browser.close()
+    }
+  }
+
+  return entities.map((entity, index) => {
+    const username = entityUsernames[index]
+    return username ? {
+      ...entity,
+      instagramFollowers: metricsByUsername.get(username)?.followers ?? null,
+      instagramEngagementRate: metricsByUsername.get(username)?.engagementRate ?? null,
+      instagramEngagementPostCount: metricsByUsername.get(username)?.engagementPostCount ?? 0,
+    } : entity
+  })
+}
+
 app.post('/api/recommendations', async (request, response) => {
   const { ageRange, gender, description, location, followers, category, page = 1 } = request.body || {}
   const followerCount = Number(followers)
@@ -106,7 +256,7 @@ app.post('/api/recommendations', async (request, response) => {
 app.post('/api/influencers', async (request, response) => {
   const {
     product, location, ageRanges, creatorTags: selectedCreatorTags = [], gender = 'any',
-    popularityTier, creatorType = 'both', page = 1,
+    popularityTier, page = 1,
   } = request.body || {}
   const tierIndex = Number(popularityTier)
   const resultPage = Number(page)
@@ -119,7 +269,6 @@ app.post('/api/influencers', async (request, response) => {
     || selectedCreatorTags.some((tag) => typeof tag !== 'string' || !supportedCreatorTags.has(tag))
     || !['female', 'male', 'any'].includes(gender)
     || !Number.isInteger(tierIndex) || tierIndex < 0 || tierIndex > 3
-    || !['instagrammers', 'youtubers', 'both'].includes(creatorType)
     || !Number.isInteger(resultPage) || resultPage < 1
   ) {
     return response.status(400).json({ error: 'Add a product, location, at least one valid age group, gender, and popularity tier.' })
@@ -147,20 +296,18 @@ app.post('/api/influencers', async (request, response) => {
       { min: 0.7 },
     ][tierIndex]
     const batchTake = 50
-    const creatorTypeTags = [
-      { type: 'influencer', urn: 'urn:tag:genre:person:influencer' },
-      { type: 'youtuber', urn: 'urn:tag:genre:person:youtuber' },
-    ].filter(({ type }) => creatorType === 'both'
-      || (creatorType === 'youtubers' ? type === 'youtuber' : type === 'influencer'))
+    const creatorTags = [...new Set(selectedCreatorTags.length
+      ? selectedCreatorTags
+      : ['urn:tag:genre:person:influencer'])]
     const selectedAgeRanges = [...new Set(ageRanges)]
-    const requests = creatorTypeTags.flatMap(({ type, urn }) => selectedAgeRanges.map(async (ageRange) => {
+    const requests = selectedAgeRanges.map(async (ageRange) => {
       const insightParams = new URLSearchParams({
         'filter.type': 'urn:entity:person',
         'operator.signal.interests.tags': 'union',
         'signal.location.query': location.trim(),
         'signal.interests.tags': tagUrns.join(','),
         'operator.filter.tags': 'union',
-        'filter.tags': [...new Set([urn, ...selectedCreatorTags])].join(','),
+        'filter.tags': creatorTags.join(','),
         'signal.demographics.age': ageRange,
         'filter.popularity.min': String(tier.min),
         page: String(resultPage),
@@ -169,35 +316,23 @@ app.post('/api/influencers', async (request, response) => {
       if (tier.max !== undefined) insightParams.set('filter.popularity.max', String(tier.max))
       if (gender !== 'any') insightParams.set('filter.demographics.gender', gender)
       const data = await qlooGet('insights/', insightParams, apiKey)
-      return { type, entities: data.results?.entities || [] }
-    }))
+      return data.results?.entities || []
+    })
 
     const sourceResults = await Promise.all(requests)
     const entities = []
-    const seen = new Map()
+    const seen = new Set()
     for (const source of sourceResults) {
-      for (const entity of source.entities) {
+      for (const entity of source) {
         const id = entity.entity_id || entity.id || entity.name
-        if (!id) continue
-        if (seen.has(id)) {
-          const existingIndex = seen.get(id)
-          const existing = entities[existingIndex]
-          entities[existingIndex] = {
-            ...existing,
-            creatorTypes: [...new Set([...existing.creatorTypes, source.type])],
-          }
-          continue
-        }
-        seen.set(id, entities.length)
-        entities.push({
-          ...entity,
-          creatorTypes: [source.type],
-        })
+        if (!id || seen.has(id)) continue
+        seen.add(id)
+        entities.push(entity)
       }
     }
     return response.json({
-      entities,
-      hasMore: sourceResults.some((source) => source.entities.length === batchTake),
+      entities: await addInstagramMetrics(entities),
+      hasMore: sourceResults.some((source) => source.length === batchTake),
     })
   } catch (error) {
     console.error('Qloo influencer search failed:', error.message)

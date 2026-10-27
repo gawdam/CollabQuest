@@ -17,6 +17,17 @@ you are an influencer looking for a brand or a brand looking for an influencer.
 The development command runs both the Vite client and the Express API server.
 The client sends searches to the local server, which keeps the Qloo API key out
 of browser code and proxies the requests to Qloo.
+For creator searches, the server uses Puppeteer to retrieve public Instagram
+follower counts and an estimated median engagement rate from the latest nine
+posts. Per-post engagement rate is calculated as (likes + comments) / followers;
+the displayed rate is the median of posts with available counts. Instagram may
+round these public counts or limit profile access, so metrics can be approximate
+or unavailable.
+Puppeteer installs a compatible browser as part of setup.
+Creator recommendations use only the selected creator categories; Influencer is
+selected by default and is used as the fallback if all categories are cleared.
+On the brand search path, select creator cards to collect them in the outreach
+cart. Begin outreach opens a card-only view for the selected creators.
 
 ## Deployment
 
