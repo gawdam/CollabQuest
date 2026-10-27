@@ -31,16 +31,34 @@ cart. Begin outreach opens a card-only view for the selected creators.
 
 ## Deployment
 
-Both discovery flows require the Express API server as well as the static
-client. The GitHub Pages workflow publishes only the client and cannot serve
-the `/api` routes. For a working deployment, host the Node server with
-`QLOO_API_KEY` configured as a server environment variable and configure the
-client host to proxy `/api` requests to it. Do not put a personal API key in
-source code or GitHub Actions configuration.
+Both discovery flows need the Express API server as well as the static client.
+GitHub Pages hosts only the client; it cannot run the `/api` routes or keep a
+Qloo key secret. The repository includes a Render Blueprint in `render.yaml`
+to deploy the API separately.
+
+1. In Render, create a new Blueprint from this repository and deploy the
+   `collabquest-api` service.
+2. Set `QLOO_API_KEY` in the Render service's environment settings. The
+   Blueprint prompts for this value; it is deliberately not stored in the
+   repository.
+3. Keep `FRONTEND_ORIGIN` set to `https://gawdam.github.io` on the Render
+   service so the API accepts requests from the GitHub Pages site.
+4. After the API is healthy at `https://<your-render-service>.onrender.com`,
+   add a repository Actions variable named `VITE_API_BASE_URL` with that full
+   HTTPS URL (no trailing slash). Go to **Settings → Secrets and variables →
+   Actions → Variables**.
+5. In **Settings → Pages**, choose **GitHub Actions** as the deployment
+   source. Push to the default branch or manually run the Pages workflow.
+
+The Pages build uses `VITE_API_BASE_URL` for API requests. This variable is
+public and should contain only the Render service URL. Never put `QLOO_API_KEY`
+in a `VITE_*` variable, the frontend, or a GitHub Pages build secret: client
+build values are visible to everyone. Store the Qloo key only in Render's
+server environment.
 
 ## Deploy to GitHub Pages
 
 The GitHub Actions workflow in `.github/workflows/deploy.yml` builds and deploys the app to GitHub Pages whenever changes are pushed to the default branch. In the repository's **Settings → Pages**, set the build and deployment source to **GitHub Actions**. The workflow automatically configures the correct base path for project pages and user or organization pages.
 
-GitHub Pages can host a static preview of the interface, but searches will work
-only when the API server is deployed separately and `/api` is routed to it.
+The development server continues to proxy `/api` to the local Express server,
+so no `VITE_API_BASE_URL` is needed for local development.

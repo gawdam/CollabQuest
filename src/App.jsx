@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
-import { ArrowDownWideNarrow, ArrowLeft, ArrowUpRight, AtSign, Building2, CircleAlert, MapPin, Search, Sparkles, Users } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { ArrowDownWideNarrow, ArrowLeft, ArrowUpRight, AtSign, Building2, Check, CircleAlert, Copy, MapPin, Search, Sparkles, Users } from 'lucide-react'
 import './App.css'
 
+const apiBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/+$/, '') || ''
 const categories = ['Travel', 'Beauty', 'Fashion', 'Fitness', 'Food', 'Gaming', 'Lifestyle', 'Technology', 'Wellness']
 const ageRanges = [
   { value: '24_and_younger', label: 'Young Gen Z (under 25)' },
@@ -36,6 +37,136 @@ const initialForm = {
 const initialInfluencerForm = {
   product: '', location: 'London', ageRanges: ['30_to_34'], creatorTags: ['urn:tag:genre:person:influencer'], gender: 'any', popularityTier: 2,
 }
+const outreachDeliverables = {
+  Reel: '1 Instagram Reel showcasing [product name] in your style',
+  Story: '1 Instagram Story set (with direct link sticker)',
+  Post: '1 Feed Carousel / Post highlighting your honest thoughts',
+  'Live mention': 'a brief mention/shoutout during your next Instagram Live stream',
+}
+const initialOutreachForm = {
+  brandName: '',
+  productName: '',
+  nicheTopic: '',
+  senderName: '',
+  objective: 'awareness',
+  partnership: 'gifting',
+  deliverables: ['Reel', 'Story'],
+  compensation: 'fixed',
+  kitName: '',
+  kitValue: '',
+  productList: '',
+  fixedFeeAmount: '',
+  discountPercent: '',
+  commissionPercent: '',
+  callToAction: 'inbound',
+  brandEmail: '',
+  brandPhone: '',
+}
+
+function buildOutreachMessage(details) {
+  const brandName = details.brandName.trim() || '[brand name]'
+  const productName = details.productName.trim() || '[product name]'
+  const objectiveHooks = {
+    awareness: `We’ve been loving your content and visual style. We’re currently introducing ${brandName} to more people who love ${details.nicheTopic.trim() || '[niche topic]'}, and your profile immediately stood out to us!`,
+    launch: `We are dropping our brand-new ${productName} very soon, and we’re putting together an exclusive group of creators to feature it first!`,
+    sale: `We’re launching an exclusive promotion for ${brandName} and wanted to give your community early access to special savings on ${productName}.`,
+    generic: `Reaching out from ${brandName}—we really admire your content and would love to explore a potential collaboration with you.`,
+  }
+  const partnershipIntros = {
+    gifting: 'We’d love to send over a complimentary PR package for you to try out',
+    paid: 'We’d love to partner with you on a sponsored campaign',
+    affiliate: 'We’d love to invite you to join our partner program and share exclusive perks with your audience',
+    ambassador: `We are looking for long-term brand ambassadors to represent ${brandName}, and we think you’d be a perfect fit`,
+  }
+  const selectedDeliverables = details.deliverables
+    .map((deliverable) => outreachDeliverables[deliverable]?.replace('[product name]', productName))
+    .filter(Boolean)
+  const partnershipSection = selectedDeliverables.length
+    ? `${partnershipIntros[details.partnership]}, featuring ${selectedDeliverables.join(' and ')}.`
+    : `${partnershipIntros[details.partnership]}.`
+  const compensationSection = details.partnership === 'gifting'
+    ? `In exchange, we’d send you our exclusive ${details.kitName.trim() || '[kit name]'} PR kit (valued at ${details.kitValue.trim() || '[kit value]'}) containing ${details.productList.trim() || '[product list]'}.`
+    : details.partnership === 'affiliate'
+      ? `We’ll set you up with a unique ${details.discountPercent.trim() || '[discount percent]'}% discount code for your followers, plus a ${details.commissionPercent.trim() || '[commission percent]'}% commission on every sale generated through your code/link.`
+      : details.compensation === 'fixed'
+      ? `We have a fixed budget of ${details.fixedFeeAmount.trim() || '[fixed fee amount]'} set aside for this collaboration.`
+        : 'We’d love to hear your standard rates for this deliverable package.'
+  const brandContacts = [
+    details.brandEmail.trim() || '[brand email]',
+    details.brandPhone.trim() || '[brand phone]',
+  ]
+  const sections = [
+    `Hi [creator name],`,
+    objectiveHooks[details.objective],
+    partnershipSection,
+    compensationSection,
+    details.callToAction === 'inbound'
+      ? `If you're interested, feel free to reach out to us directly at ${brandContacts[0]} or call/WhatsApp us at ${brandContacts[1]} so we can share the complete brief!`
+      : details.callToAction === 'outbound'
+        ? 'If this sounds like a fit, please share your preferred email address or phone number and we’ll send over the complete brief and details!'
+        : 'Let us know if you’re interested by replying right here in DM, and we can take it from there!',
+    `Talk soon!\n${details.senderName.trim() || '[your name]'}\n${brandName}`,
+  ]
+
+  return sections.join('\n\n')
+}
+
+function getOutreachHighlightTerms(details) {
+  return [
+    details.brandName,
+    details.productName,
+    details.nicheTopic,
+    details.senderName,
+    details.kitName,
+    details.kitValue,
+    details.productList,
+    details.fixedFeeAmount,
+    details.discountPercent && `${details.discountPercent}%`,
+    details.commissionPercent && `${details.commissionPercent}%`,
+    details.brandEmail,
+    details.brandPhone,
+  ].filter((term) => typeof term === 'string' && term.trim()).map((term) => term.trim())
+}
+
+function OutreachMessageEditor({ value, onChange, highlightTerms }) {
+  const textareaRef = useRef(null)
+  const escapedTerms = useMemo(
+    () => [...new Set(highlightTerms)].sort((first, second) => second.length - first.length).map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    [highlightTerms],
+  )
+  const highlightedMessage = useMemo(() => {
+    const matcher = new RegExp(`(\\[[^\\]\\n]+\\]${escapedTerms.length ? `|${escapedTerms.join('|')}` : ''})`, 'gi')
+    return value.split(matcher).map((part, index) => (
+      /^\[[^\]\n]+\]$/.test(part)
+        ? <span className="outreach-unfilled-value" key={`${part}-${index}`}>{part}</span>
+        : escapedTerms.some((term) => new RegExp(`^${term}$`, 'i').test(part))
+        ? <span className="outreach-dynamic-value" key={`${part}-${index}`}>{part}</span>
+        : part
+    ))
+  }, [escapedTerms, value])
+
+  function syncScroll(event) {
+    if (textareaRef.current) {
+      textareaRef.current.previousElementSibling.scrollTop = event.currentTarget.scrollTop
+      textareaRef.current.previousElementSibling.scrollLeft = event.currentTarget.scrollLeft
+    }
+  }
+
+  return (
+    <div className="outreach-editor">
+      <div className="outreach-highlight-layer" aria-hidden="true">{highlightedMessage}{value.endsWith('\n') ? ' ' : ''}</div>
+      <textarea
+        ref={textareaRef}
+        id="outreach-message"
+        className="outreach-message"
+        value={value}
+        onChange={onChange}
+        onScroll={syncScroll}
+        spellCheck="false"
+      />
+    </div>
+  )
+}
 
 function getInfluencerKey(person) {
   return person.entity_id || person.id || person.name
@@ -54,7 +185,7 @@ function readOutreachInfluencers() {
 }
 
 async function getRecommendations(endpoint, request) {
-  const response = await fetch(endpoint, {
+  const response = await fetch(`${apiBaseUrl}${endpoint}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
@@ -182,7 +313,7 @@ function getShortDescription(value) {
   return (englishDescription || descriptions[0])?.value.trim() || ''
 }
 
-function InfluencerCard({ person, index, selected = false, onToggle, selectable = true }) {
+function InfluencerCard({ person, index, selected = false, onToggle, selectable = true, onCopy, copied = false }) {
   const name = person.name || 'Unknown creator'
   const affinity = Number(person.query?.affinity ?? 0)
   const properties = person.properties || {}
@@ -226,6 +357,10 @@ function InfluencerCard({ person, index, selected = false, onToggle, selectable 
         </footer>
       </button>
       {instagramUrl && <a className="creator-instagram-link" href={instagramUrl} target="_blank" rel="noreferrer" aria-label={`${name} on Instagram`} title="Open Instagram profile"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5" /><circle cx="12" cy="12" r="4" /><circle className="instagram-icon-dot" cx="17.5" cy="6.8" r="1" /></svg></a>}
+      {onCopy && <button className="creator-copy-button" type="button" onClick={() => onCopy(person)} aria-label={`Copy outreach message for ${name}`} title={`Copy message for ${name}`}>
+        {copied ? <Check size={17} /> : <Copy size={17} />}
+        <span>{copied ? 'Copied' : 'Copy'}</span>
+      </button>}
     </article>
   )
 }
@@ -233,6 +368,12 @@ function InfluencerCard({ person, index, selected = false, onToggle, selectable 
 function App() {
   const [isOutreachPage, setIsOutreachPage] = useState(() => window.location.hash === '#outreach')
   const [outreachInfluencers, setOutreachInfluencers] = useState(readOutreachInfluencers)
+  const [outreachDraft, setOutreachDraft] = useState(() => ({
+    form: initialOutreachForm,
+    message: buildOutreachMessage(initialOutreachForm),
+  }))
+  const [copiedCreator, setCopiedCreator] = useState('')
+  const [copyError, setCopyError] = useState('')
   const [selectedInfluencers, setSelectedInfluencers] = useState([])
   const [role, setRole] = useState(null)
   const [form, setForm] = useState(initialForm)
@@ -315,6 +456,43 @@ function App() {
     setSelectedInfluencers((current) => current.filter((selected) => getInfluencerKey(selected) !== key))
   }
 
+  function updateOutreachField(event) {
+    const { name, value } = event.target
+    setOutreachDraft((current) => {
+      const form = { ...current.form, [name]: value }
+      if (name === 'partnership') {
+        form.compensation = value === 'gifting' ? 'gifting' : value === 'affiliate' ? 'affiliate' : 'fixed'
+      }
+      return { form, message: buildOutreachMessage(form) }
+    })
+  }
+
+  function toggleOutreachDeliverable(deliverable) {
+    setOutreachDraft((current) => {
+      const form = {
+        ...current.form,
+        deliverables: current.form.deliverables.includes(deliverable)
+          ? current.form.deliverables.filter((item) => item !== deliverable)
+          : [...current.form.deliverables, deliverable],
+      }
+      return { form, message: buildOutreachMessage(form) }
+    })
+  }
+
+  async function copyOutreachMessage(person) {
+    const name = person.name || 'creator'
+    const personalizedMessage = outreachDraft.message.replace(/\[creator name\]/gi, name)
+    try {
+      await navigator.clipboard.writeText(personalizedMessage)
+      setCopiedCreator(getInfluencerKey(person))
+      setCopyError('')
+      window.setTimeout(() => setCopiedCreator(''), 1800)
+    } catch (clipboardError) {
+      console.error('Could not copy outreach message:', clipboardError)
+      setCopyError('Could not copy the message. Check your browser clipboard permissions and try again.')
+    }
+  }
+
   function beginOutreach() {
     try {
       sessionStorage.setItem('outreachInfluencers', JSON.stringify(selectedInfluencers))
@@ -381,6 +559,9 @@ function App() {
     setGenderFilter('')
   }
 
+  const outreachForm = outreachDraft.form
+  const outreachMessage = outreachDraft.message
+  const outreachHighlightTerms = getOutreachHighlightTerms(outreachForm)
   const countries = [...new Set(brands.flatMap((person) => {
     const citizenship = person.properties?.citizenship
     return (Array.isArray(citizenship) ? citizenship : citizenship ? [citizenship] : [])
@@ -457,18 +638,85 @@ function App() {
 
   if (isOutreachPage) {
     return (
-      <main className="outreach-page">
-        <div className="outreach-cards-grid">
-          {outreachInfluencers.map((person, index) => (
-            <InfluencerCard
-              key={getInfluencerKey(person) || index}
-              person={person}
-              index={index}
-              selectable={false}
-            />
-          ))}
-        </div>
-      </main>
+      <div className="app-shell">
+        <header className="topbar">
+          <a className="wordmark" href="#top" aria-label="Signal home"><span className="wordmark-icon"><Sparkles size={16} /></span><span>signal<span className="wordmark-period">.</span></span></a>
+          <div className="topbar-note"><span className="status-dot" /> CREATOR INTELLIGENCE <span className="topbar-divider">/</span> OUTREACH STUDIO</div>
+          <a className="topbar-link" href="#"><ArrowLeft size={14} /> Back to shortlist</a>
+        </header>
+        <main className="outreach-page">
+          <section className="outreach-intro">
+            <div className="eyebrow"><span>02</span> THE OUTREACH STUDIO</div>
+            <h1>Make it <em>personal.</em></h1>
+            <p>Shape your campaign, refine the message, and reach out to your shortlisted creators.</p>
+          </section>
+          <div className="outreach-workspace">
+            <section className="outreach-brief" aria-labelledby="outreach-brief-title">
+              <div className="outreach-section-heading"><span className="section-kicker">01 / CAMPAIGN DETAILS</span><h2 id="outreach-brief-title">Your brief</h2></div>
+              <div className="outreach-form">
+                <fieldset className="outreach-filter-block">
+                  <legend><span>01</span> Marketing objective</legend>
+                  <label className="field"><span>Objective</span><select name="objective" value={outreachForm.objective} onChange={updateOutreachField}><option value="awareness">Brand awareness</option><option value="launch">Product launch</option><option value="sale">Sale / performance</option><option value="generic">Generic</option></select></label>
+                  <label className="field"><span>Brand name</span><input name="brandName" value={outreachForm.brandName} onChange={updateOutreachField} placeholder="e.g. Good Ground" /></label>
+                  <label className="field"><span>Product or collection</span><input name="productName" value={outreachForm.productName} onChange={updateOutreachField} placeholder="e.g. Daily essentials" /></label>
+                  {outreachForm.objective === 'awareness' && <label className="field"><span>Niche topic</span><input name="nicheTopic" value={outreachForm.nicheTopic} onChange={updateOutreachField} placeholder="e.g. sustainable skincare" /></label>}
+                  <label className="field"><span>Your name</span><input name="senderName" value={outreachForm.senderName} onChange={updateOutreachField} placeholder="e.g. Alex" /></label>
+                </fieldset>
+                <fieldset className="outreach-filter-block">
+                  <legend><span>02</span> Deliverables</legend>
+                  <div className="outreach-deliverables">
+                    <div className="creator-tag-options">{['Reel', 'Story', 'Post', 'Live mention'].map((deliverable) => <button className={`creator-tag${outreachForm.deliverables.includes(deliverable) ? ' is-selected' : ''}`} key={deliverable} type="button" aria-pressed={outreachForm.deliverables.includes(deliverable)} onClick={() => toggleOutreachDeliverable(deliverable)}>{deliverable}</button>)}</div>
+                  </div>
+                </fieldset>
+                <fieldset className="outreach-filter-block">
+                  <legend><span>03</span> Budget</legend>
+                  <label className="field"><span>Partnership type</span><select name="partnership" value={outreachForm.partnership} onChange={updateOutreachField}><option value="gifting">Gifting</option><option value="paid">Paid collaboration</option><option value="affiliate">Affiliate</option><option value="ambassador">Ambassador</option></select></label>
+                  {outreachForm.partnership === 'gifting' && <>
+                    <label className="field"><span>Kit name</span><input name="kitName" value={outreachForm.kitName} onChange={updateOutreachField} placeholder="e.g. The Daily Ritual Kit" /></label>
+                    <label className="field"><span>Kit value</span><input name="kitValue" value={outreachForm.kitValue} onChange={updateOutreachField} placeholder="e.g. $120" /></label>
+                    <label className="field"><span>Products in the kit</span><input name="productList" value={outreachForm.productList} onChange={updateOutreachField} placeholder="e.g. cleanser, serum, moisturizer" /></label>
+                  </>}
+                  {outreachForm.partnership === 'affiliate' && <>
+                    <label className="field"><span>Follower discount (%)</span><input name="discountPercent" value={outreachForm.discountPercent} onChange={updateOutreachField} placeholder="e.g. 15" inputMode="decimal" /></label>
+                    <label className="field"><span>Creator commission (%)</span><input name="commissionPercent" value={outreachForm.commissionPercent} onChange={updateOutreachField} placeholder="e.g. 10" inputMode="decimal" /></label>
+                  </>}
+                  {['paid', 'ambassador'].includes(outreachForm.partnership) && <>
+                    <label className="field"><span>Compensation approach</span><select name="compensation" value={outreachForm.compensation} onChange={updateOutreachField}><option value="fixed">Fixed fee</option><option value="ask">Ask for creator’s rates</option></select></label>
+                    {outreachForm.compensation === 'fixed' && <label className="field"><span>Fixed fee</span><input name="fixedFeeAmount" value={outreachForm.fixedFeeAmount} onChange={updateOutreachField} placeholder="e.g. $500" /></label>}
+                  </>}
+                </fieldset>
+                <fieldset className="outreach-filter-block">
+                  <legend><span>04</span> Call to action</legend>
+                  <label className="field"><span>How should they respond?</span><select name="callToAction" value={outreachForm.callToAction} onChange={updateOutreachField}><option value="inbound">Contact us directly</option><option value="outbound">Ask for creator’s email / phone</option><option value="instagram">Reply to Instagram message</option></select></label>
+                  {outreachForm.callToAction === 'inbound' && <>
+                    <label className="field"><span>Brand email</span><input name="brandEmail" type="email" value={outreachForm.brandEmail} onChange={updateOutreachField} placeholder="e.g. hello@brand.com" /></label>
+                    <label className="field"><span>Brand phone / WhatsApp</span><input name="brandPhone" type="tel" value={outreachForm.brandPhone} onChange={updateOutreachField} placeholder="e.g. +1 555 0100" /></label>
+                  </>}
+                </fieldset>
+              </div>
+            </section>
+            <section className="outreach-composer" aria-labelledby="outreach-message-title">
+              <div className="outreach-section-heading"><span className="section-kicker">02 / MESSAGE TEMPLATE</span><h2 id="outreach-message-title">Your outreach</h2></div>
+              <p className="outreach-helper">A modular draft tailored to your brief. Edit anything before copying.</p>
+              <label className="outreach-message-label" htmlFor="outreach-message">Email message</label>
+              <OutreachMessageEditor
+                value={outreachMessage}
+                highlightTerms={outreachHighlightTerms}
+                onChange={(event) => setOutreachDraft((current) => ({ ...current, message: event.target.value }))}
+              />
+              <p className="outreach-token-note">Personalized tags like <code>[creator name]</code> are filled in when you copy a creator’s message.</p>
+            </section>
+            <aside className="outreach-creators" aria-labelledby="outreach-creators-title">
+              <div className="outreach-section-heading"><span className="section-kicker">03 / YOUR SHORTLIST</span><h2 id="outreach-creators-title">Creators <span>{outreachInfluencers.length}</span></h2></div>
+              {copyError && <p className="outreach-copy-error" role="alert">{copyError}</p>}
+              {outreachInfluencers.length > 0
+                ? <div className="outreach-cards-grid">{outreachInfluencers.map((person, index) => <InfluencerCard key={getInfluencerKey(person) || index} person={person} index={index} selectable={false} onCopy={copyOutreachMessage} copied={copiedCreator === getInfluencerKey(person)} />)}</div>
+                : <div className="outreach-empty"><Users size={20} /><p>No creators in your shortlist yet.</p><a href="#">Return to creator search</a></div>}
+            </aside>
+          </div>
+        </main>
+        <footer className="site-footer"><span>© 2026 SIGNAL STUDIO</span><span>BUILT FOR THE NEXT GOOD COLLABORATION <span className="footer-star">✳</span></span></footer>
+      </div>
     )
   }
 
