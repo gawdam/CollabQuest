@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDownWideNarrow, ArrowLeft, ArrowUpRight, AtSign, Building2, Check, CircleAlert, Copy, Eye, EyeOff, MapPin, Search, Sparkles, Users } from 'lucide-react'
+import { ArrowDownWideNarrow, ArrowLeft, ArrowUpRight, AtSign, Building2, Check, CircleAlert, Copy, MapPin, Search, Sparkles, Users } from 'lucide-react'
 import './App.css'
 
 const categories = ['Travel', 'Beauty', 'Fashion', 'Fitness', 'Food', 'Gaming', 'Lifestyle', 'Technology', 'Wellness']
@@ -183,105 +183,7 @@ function readOutreachInfluencers() {
   }
 }
 
-async function qlooGet(path, params, apiKey) {
-  const url = new URL(`https://hackathon.api.qloo.com/v2/${path}`)
-  url.search = params.toString()
-  const response = await fetch(url, {
-    headers: { 'X-Api-Key': apiKey, accept: 'application/json' },
-  })
-  const data = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(data.message || data.error || `Qloo request failed (${response.status})`)
-  return data
-}
-
-async function getDirectRecommendations(endpoint, request, apiKey) {
-  if (endpoint === '/api/recommendations') {
-    const tagsParams = new URLSearchParams({
-      'feature.typo_tolerance': 'true',
-      'filter.query': `${request.category || ''} ${request.description}`.trim(),
-      'feature.semantic_search': 'true',
-      page: '1',
-      take: '10',
-    })
-    const tagsData = await qlooGet('tags', tagsParams, apiKey)
-    const tagUrns = (tagsData.results?.tags || []).map((tag) => tag.id).filter(Boolean)
-    if (!tagUrns.length) return { entities: [], hasMore: false }
-
-    const [popularityMin, popularityMax] = Number(request.followers) < 10000
-      ? [0, 0.2]
-      : Number(request.followers) < 50000
-        ? [0.2, 0.4]
-        : Number(request.followers) < 100000
-          ? [0.4, 0.7]
-          : Number(request.followers) < 500000
-            ? [0.7, 0.85]
-            : Number(request.followers) < 1000000
-              ? [0.85, 0.95]
-              : [0.95, 1]
-    const insightsParams = new URLSearchParams({
-      'filter.type': 'urn:entity:brand',
-      'signal.demographics.age': request.ageRange,
-      'signal.interests.tags': tagUrns.join(','),
-      'signal.location.query': request.location.trim(),
-      'filter.popularity.min': String(popularityMin),
-      'filter.popularity.max': String(popularityMax),
-      page: String(request.page || 1),
-      take: '50',
-    })
-    if (request.gender && request.gender !== 'any') insightsParams.set('signal.demographics.gender', request.gender)
-    const data = await qlooGet('insights/', insightsParams, apiKey)
-    return { entities: data.results?.entities || [], hasMore: false }
-  }
-
-  const tagsParams = new URLSearchParams({
-    'filter.query': request.product.trim(),
-    'feature.semantic_search': 'true',
-    take: '5',
-  })
-  const tagsData = await qlooGet('tags', tagsParams, apiKey)
-  const tagUrns = [...new Set((tagsData.results?.tags || []).map((tag) => tag.id).filter(Boolean))]
-  const tiers = [
-    { min: 0.1, max: 0.3 },
-    { min: 0.3, max: 0.5 },
-    { min: 0.5, max: 0.7 },
-    { min: 0.7 },
-  ]
-  const tier = tiers[Number(request.popularityTier)]
-  const creatorTags = [...new Set(request.creatorTags.length
-    ? request.creatorTags
-    : ['urn:tag:genre:person:influencer'])]
-  const requests = request.ageRanges.map(async (ageRange) => {
-    const params = new URLSearchParams({
-      'filter.type': 'urn:entity:person',
-      'operator.signal.interests.tags': 'union',
-      'signal.location.query': request.location.trim(),
-      'signal.interests.tags': tagUrns.join(','),
-      'operator.filter.tags': 'union',
-      'filter.tags': creatorTags.join(','),
-      'signal.demographics.age': ageRange,
-      'filter.popularity.min': String(tier.min),
-      page: String(request.page || 1),
-      take: '50',
-    })
-    if (tier.max !== undefined) params.set('filter.popularity.max', String(tier.max))
-    if (request.gender !== 'any') params.set('filter.demographics.gender', request.gender)
-    const data = await qlooGet('insights/', params, apiKey)
-    return data.results?.entities || []
-  })
-  const sourceResults = await Promise.all(requests)
-  const seen = new Set()
-  const entities = sourceResults.flat().filter((entity) => {
-    const id = entity.entity_id || entity.id || entity.name
-    if (!id || seen.has(id)) return false
-    seen.add(id)
-    return true
-  })
-  return { entities, hasMore: sourceResults.some((results) => results.length === 50) }
-}
-
-async function getRecommendations(endpoint, request, apiKey) {
-  if (apiKey) return getDirectRecommendations(endpoint, request, apiKey)
-
+async function getRecommendations(endpoint, request) {
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -290,6 +192,19 @@ async function getRecommendations(endpoint, request, apiKey) {
   const data = await response.json().catch(() => ({}))
   if (!response.ok) throw new Error(data.error || `Recommendation request failed (${response.status})`)
   return { entities: data.entities || [], hasMore: Boolean(data.hasMore) }
+}
+
+async function getInstagramActivity(username) {
+  const response = await fetch('/api/influencers/metrics', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ usernames: [username] }),
+  })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(data.error || `Instagram details request failed (${response.status})`)
+  const metrics = data.metrics?.[username]
+  if (!metrics) throw new Error(`No Instagram details were returned for @${username}.`)
+  return metrics
 }
 
 function BrandCard({ brand, index }) {
@@ -410,7 +325,34 @@ function getShortDescription(value) {
   return (englishDescription || descriptions[0])?.value.trim() || ''
 }
 
-function InfluencerCard({ person, index, selected = false, onToggle, selectable = true, onCopy, copied = false }) {
+function getInstagramUsername(person) {
+  const entry = person?.external?.instagram_username || person?.external?.instagram
+  const profile = Array.isArray(entry) ? entry[0] : entry
+  if (!profile) return null
+
+  const value = typeof profile === 'string'
+    ? profile
+    : profile.url || profile.href || profile.username || profile.handle || profile.id || profile.value
+  if (typeof value !== 'string' || !value.trim()) return null
+
+  const normalized = value.trim().replace(/^@/, '')
+  if (/^https?:\/\//i.test(normalized)) {
+    try {
+      const url = new URL(normalized)
+      if (!['instagram.com', 'www.instagram.com'].includes(url.hostname.toLowerCase())) return null
+      return url.pathname.split('/').filter(Boolean)[0] || null
+    } catch {
+      return null
+    }
+  }
+
+  if (!/^[A-Za-z0-9._]+$/.test(normalized) || /^(accounts|about|developer|direct|explore|legal|p|reel|reels|stories)$/i.test(normalized)) {
+    return null
+  }
+  return normalized
+}
+
+function InfluencerCard({ person, index, selected = false, onToggle, selectable = true, onCopy, copied = false, activityEnabled = true, activityStatus = 'idle', activityError = '', onFetchActivity }) {
   const name = person.name || 'Unknown creator'
   const affinity = Number(person.query?.affinity ?? 0)
   const properties = person.properties || {}
@@ -448,11 +390,30 @@ function InfluencerCard({ person, index, selected = false, onToggle, selectable 
         <div className={`creator-card-photo mark-${index % 5}`}>
           {imageUrl ? <img src={imageUrl} alt={`${name} profile`} /> : <span aria-hidden="true">{name.slice(0, 1).toUpperCase()}</span>}
         </div>
-        <footer className="creator-card-metrics">
-          <div className="creator-card-metric"><span>FOLLOWERS</span><strong>{instagramFollowerLabel}</strong></div>
-          <div className="creator-card-metric"><span>MEDIAN ENGAGEMENT</span><strong>{engagementRateLabel}</strong><small>{engagementPostCount ? `Latest ${engagementPostCount} of 9 posts` : 'Post data unavailable'}</small></div>
-        </footer>
       </button>
+      <footer className="creator-card-metrics">
+        {!activityEnabled
+          ? <>
+            <div className="creator-card-metric"><span>FOLLOWERS</span><strong>{instagramFollowerLabel}</strong></div>
+            <div className="creator-card-metric"><span>MEDIAN ENGAGEMENT</span><strong>{engagementRateLabel}</strong><small>{engagementPostCount ? `Latest ${engagementPostCount} of 6 posts` : 'Post data unavailable'}</small></div>
+          </>
+          : activityStatus === 'loading'
+          ? <div className="creator-card-activity-loading" role="status"><span className="creator-activity-spinner" aria-hidden="true" />Fetching Instagram details</div>
+          : activityStatus === 'success'
+            ? <>
+              <div className="creator-card-metric"><span>FOLLOWERS</span><strong>{instagramFollowerLabel}</strong></div>
+              <div className="creator-card-metric"><span>MEDIAN ENGAGEMENT</span><strong>{engagementRateLabel}</strong><small>{engagementPostCount ? `Latest ${engagementPostCount} of 6 posts` : 'Post data unavailable'}</small></div>
+              <button className="creator-fetch-details" type="button" onClick={() => onFetchActivity(person)}>Refresh Instagram details</button>
+            </>
+            : <>
+              {activityStatus === 'error' && <p className="creator-card-activity-error" role="alert">{activityError}</p>}
+              {instagramUrl
+                ? <button className="creator-fetch-details" type="button" onClick={() => onFetchActivity(person)}>
+                  Fetch Instagram details
+                </button>
+                : <p className="creator-card-activity-unavailable">Instagram username unavailable</p>}
+            </>}
+      </footer>
       {instagramUrl && <a className="creator-instagram-link" href={instagramUrl} target="_blank" rel="noreferrer" aria-label={`${name} on Instagram`} title="Open Instagram profile"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5" /><circle cx="12" cy="12" r="4" /><circle className="instagram-icon-dot" cx="17.5" cy="6.8" r="1" /></svg></a>}
       {onCopy && <button className="creator-copy-button" type="button" onClick={() => onCopy(person)} aria-label={`Copy outreach message for ${name}`} title={`Copy message for ${name}`}>
         {copied ? <Check size={17} /> : <Copy size={17} />}
@@ -480,6 +441,7 @@ function App() {
   const [nextApiPage, setNextApiPage] = useState(2)
   const [hasMoreResults, setHasMoreResults] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [instagramActivityStatuses, setInstagramActivityStatuses] = useState({})
   const [resultSearch, setResultSearch] = useState('')
   const [creatorSort, setCreatorSort] = useState('affinity')
   const [countryFilter, setCountryFilter] = useState('')
@@ -488,10 +450,11 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [loadingMessageIndex, setLoadingMessageIndex] = useState(0)
   const [error, setError] = useState('')
-  const [qlooApiKey, setQlooApiKey] = useState('')
-  const [showQlooApiKey, setShowQlooApiKey] = useState(false)
+  const activeInstagramUsernames = useRef(new Set())
+  const instagramRequestQueue = useRef(Promise.resolve())
+  const instagramSearchGeneration = useRef(0)
   const loadingMessages = role === 'brand'
-    ? ['Sending query to Qloo API', 'Finding influencers with a natural fit', 'Fetching Instagram metrics']
+    ? ['Sending query to Qloo API', 'Finding influencers with a natural fit', 'Preparing your creator matches']
     : ['Sending query to Qloo API', 'Finding brands with a natural fit', 'Preparing your matches']
 
   useEffect(() => {
@@ -604,15 +567,59 @@ function App() {
     }
   }
 
+  function fetchInstagramDetails(person) {
+    const username = getInstagramUsername(person)
+    if (!username) return
+
+    const generation = instagramSearchGeneration.current
+    const requestKey = `${generation}:${username}`
+    if (activeInstagramUsernames.current.has(requestKey)) return
+
+    activeInstagramUsernames.current.add(requestKey)
+    setInstagramActivityStatuses((current) => ({
+      ...current,
+      [username]: { status: 'loading', error: '' },
+    }))
+    instagramRequestQueue.current = instagramRequestQueue.current.then(async () => {
+      try {
+        if (generation !== instagramSearchGeneration.current) return
+
+        const metrics = await getInstagramActivity(username)
+        if (generation !== instagramSearchGeneration.current) return
+
+        const normalizedMetrics = {
+          instagramFollowers: metrics.followers,
+          instagramEngagementRate: metrics.engagementRate,
+          instagramEngagementPostCount: metrics.engagementPostCount,
+        }
+        const applyMetrics = (creator) => getInstagramUsername(creator) === username
+          ? { ...creator, ...normalizedMetrics }
+          : creator
+        setBrands((current) => current.map(applyMetrics))
+        setSelectedInfluencers((current) => current.map(applyMetrics))
+        setInstagramActivityStatuses((current) => ({
+          ...current,
+          [username]: { status: 'success', error: '' },
+        }))
+      } catch (requestError) {
+        console.error(`Could not fetch Instagram details for @${username}:`, requestError)
+        if (generation === instagramSearchGeneration.current) {
+          setInstagramActivityStatuses((current) => ({
+            ...current,
+            [username]: {
+              status: 'error',
+              error: requestError.message || 'Could not fetch Instagram details.',
+            },
+          }))
+        }
+      } finally {
+        activeInstagramUsernames.current.delete(requestKey)
+      }
+    })
+  }
+
   async function handleSubmit(event) {
     event.preventDefault()
-    if (!qlooApiKey.trim() && import.meta.env.PROD) {
-      setError('Enter your Qloo API key to search. Your key is used only for direct requests from this browser.')
-      setHasSearched(true)
-      setBrands([])
-      setHasMoreResults(false)
-      return
-    }
     if (role === 'brand' && influencerForm.ageRanges.length === 0) {
       setError('Select at least one age group.')
       setHasSearched(true)
@@ -623,6 +630,8 @@ function App() {
     setLoadingMessageIndex(0)
     setLoading(true)
     setError('')
+    instagramSearchGeneration.current += 1
+    setInstagramActivityStatuses({})
     try {
       const isBrand = role === 'brand'
       const request = isBrand
@@ -631,7 +640,6 @@ function App() {
       const { entities, hasMore } = await getRecommendations(
         isBrand ? '/api/influencers' : '/api/recommendations',
         request,
-        qlooApiKey.trim(),
       )
       setBrands(entities.sort((a, b) => Number(b.query?.affinity ?? 0) - Number(a.query?.affinity ?? 0)))
       setResultPage(0)
@@ -652,6 +660,8 @@ function App() {
   const creatorTier = form.followers < 10000 ? 'Nano creator' : form.followers < 50000 ? 'Micro creator' : form.followers < 100000 ? 'Mid-tier creator' : form.followers < 500000 ? 'Macro creator' : form.followers < 1000000 ? 'Top creator' : 'Celebrity creator'
 
   function chooseRole(nextRole) {
+    instagramSearchGeneration.current += 1
+    setInstagramActivityStatuses({})
     setRole(nextRole)
     setBrands([])
     setSelectedInfluencers([])
@@ -720,7 +730,6 @@ function App() {
           isBrand
             ? { ...influencerForm, popularityTier: Number(influencerForm.popularityTier), page }
             : { ...form, page },
-          qlooApiKey.trim(),
         )
         setBrands((current) => {
           const seen = new Set(current.map((entity) => entity.entity_id || entity.id || entity.name))
@@ -818,7 +827,7 @@ function App() {
               <div className="outreach-section-heading"><span className="section-kicker">03 / YOUR SHORTLIST</span><h2 id="outreach-creators-title">Creators <span>{outreachInfluencers.length}</span></h2></div>
               {copyError && <p className="outreach-copy-error" role="alert">{copyError}</p>}
               {outreachInfluencers.length > 0
-                ? <div className="outreach-cards-grid">{outreachInfluencers.map((person, index) => <InfluencerCard key={getInfluencerKey(person) || index} person={person} index={index} selectable={false} onCopy={copyOutreachMessage} copied={copiedCreator === getInfluencerKey(person)} />)}</div>
+                ? <div className="outreach-cards-grid">{outreachInfluencers.map((person, index) => <InfluencerCard key={getInfluencerKey(person) || index} person={person} index={index} selectable={false} activityEnabled={false} onCopy={copyOutreachMessage} copied={copiedCreator === getInfluencerKey(person)} />)}</div>
                 : <div className="outreach-empty"><Users size={20} /><p>No creators in your shortlist yet.</p><a href="#">Return to creator search</a></div>}
             </aside>
           </div>
@@ -865,24 +874,6 @@ function App() {
           <aside className="brief-panel">
             <div className="panel-heading"><div><span className="section-kicker">{role === 'brand' ? 'YOUR CAMPAIGN' : 'YOUR PROFILE'}</span><h2 className={role === 'brand' ? 'preserve-font-size' : ''}>{role === 'brand' ? 'Find creators' : 'Build a brief'}</h2></div><span className="step-count">01 <span>/ 01</span></span></div>
             <form onSubmit={handleSubmit}>
-              <fieldset className="field-group api-key-group">
-                <legend>Your Qloo API key</legend>
-                <label className="field"><span>API key</span><span className="api-key-control">
-                  <input
-                    name="qlooApiKey"
-                    type={showQlooApiKey ? 'text' : 'password'}
-                    value={qlooApiKey}
-                    onChange={(event) => setQlooApiKey(event.target.value)}
-                    autoComplete="off"
-                    placeholder="Enter your personal API key"
-                    aria-label="Your Qloo API key"
-                  />
-                  <button className="api-key-toggle" type="button" onClick={() => setShowQlooApiKey((visible) => !visible)} aria-label={showQlooApiKey ? 'Hide API key' : 'Show API key'} title={showQlooApiKey ? 'Hide API key' : 'Show API key'}>
-                    {showQlooApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
-                  </button>
-                </span></label>
-                <p className="api-key-note">Sent directly to Qloo from your browser. It is not saved or included in the site build.</p>
-              </fieldset>
               {role === 'brand' ? <>
                 <fieldset className="field-group"><legend>Product</legend>
                   <label className="field"><span>What product are you promoting?</span><input name="product" value={influencerForm.product} onChange={updateInfluencerField} placeholder="e.g. sneakers" required /></label>
@@ -971,6 +962,9 @@ function App() {
                       index={index}
                       selected={selectedInfluencers.some((selected) => getInfluencerKey(selected) === getInfluencerKey(brand))}
                       onToggle={() => toggleInfluencerSelection(brand)}
+                      activityStatus={instagramActivityStatuses[getInstagramUsername(brand)]?.status}
+                      activityError={instagramActivityStatuses[getInstagramUsername(brand)]?.error}
+                      onFetchActivity={fetchInstagramDetails}
                     />
                     : <BrandCard key={brand.entity_id || brand.id || `${brand.name}-${index}`} brand={brand} index={index} />)}</div>
                     : <div className="results-empty"><div className="orbit-art" aria-hidden="true"><span className="orbit orbit-one" /><span className="orbit orbit-two" /><span className="orbit-core"><Sparkles size={23} /></span><span className="orbit-node node-one" /><span className="orbit-node node-two" /><span className="orbit-node node-three" /></div><span className="empty-overline">A BETTER KIND OF COLLABORATION</span><h3>Good partnerships<br />feel <em>inevitable.</em></h3><p>{role === 'brand' ? 'Add your product, creator style, and target audience to find people who match.' : 'Set your creator signals and we’ll surface brands with an audience affinity to match.'}</p><div className="signal-tags"><span><Users size={13} /> Audience</span><span><Building2 size={13} /> {role === 'brand' ? 'Creator fit' : 'Brand fit'}</span><span><MapPin size={13} /> Place</span></div></div>}

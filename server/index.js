@@ -1,6 +1,8 @@
 import 'dotenv/config'
 import express from 'express'
-import puppeteer from 'puppeteer'
+import { ApifyClient } from 'apify-client'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const app = express()
 const port = Number(process.env.PORT) || 3001
@@ -32,6 +34,7 @@ const supportedCreatorTags = new Set([
 ])
 
 app.use(express.json({ limit: '20kb' }))
+app.get('/api/health', (request, response) => response.json({ status: 'ok' }))
 
 function getPopularityRange(followerCount) {
   if (followerCount < 10000) return [0, 0.2]
@@ -55,153 +58,52 @@ async function qlooGet(path, params, apiKey) {
   return data
 }
 
-function getInstagramUsername(entry) {
-  const profile = Array.isArray(entry) ? entry[0] : entry
-  if (!profile) return null
-
-  const value = typeof profile === 'string'
-    ? profile
-    : profile.url || profile.href || profile.username || profile.handle || profile.id || profile.value
-  if (typeof value !== 'string' || !value.trim()) return null
-
-  const normalized = value.trim().replace(/^@/, '')
-  let username = normalized
-  if (/^https?:\/\//i.test(normalized)) {
-    try {
-      const url = new URL(normalized)
-      if (!['instagram.com', 'www.instagram.com'].includes(url.hostname.toLowerCase())) return null
-      username = url.pathname.split('/').filter(Boolean)[0] || ''
-    } catch {
-      return null
-    }
+async function getInstagramMetrics(username, token) {
+  const client = new ApifyClient({ token })
+  const run = await client.actor('apify/instagram-scraper').call({
+    resultsType: 'details',
+    directUrls: [`https://www.instagram.com/${username}/`],
+    resultsLimit: 6,
+    searchType: 'profile',
+    searchLimit: 1,
+    addParentData: false,
+  })
+  if (!run.defaultDatasetId) {
+    throw new Error(`Apify returned no dataset for @${username}.`)
   }
 
-  if (!/^[A-Za-z0-9._]+$/.test(username) || /^(accounts|about|developer|direct|explore|legal|p|reel|reels|stories)$/i.test(username)) {
-    return null
+  const { items } = await client.dataset(run.defaultDatasetId).listItems()
+  const profile = items.find((item) => typeof item.username === 'string'
+    && item.username.toLowerCase() === username.toLowerCase())
+  if (!profile) {
+    throw new Error(`Apify returned no Instagram profile for @${username}.`)
   }
-  return username
-}
 
-function parseInstagramFollowerCount(content) {
-  const match = content.match(/([\d.,]+)\s*([KkMmBb]?)\s+Followers/i)
-  if (!match) return null
-
-  return parseInstagramCount(match[1], match[2])
-}
-
-function parseInstagramCount(value, suffix = '') {
-  const count = Number(value.replace(/,/g, ''))
-  const multiplier = { '': 1, k: 1_000, m: 1_000_000, b: 1_000_000_000 }[suffix.toLowerCase()]
-  return Number.isFinite(count) ? Math.round(count * multiplier) : null
-}
-
-function parseInstagramPostEngagement(content) {
-  const likesMatch = content.match(/([\d.,]+)\s*([KkMmBb]?)\s+likes?\b/i)
-  const commentsMatch = content.match(/([\d.,]+)\s*([KkMmBb]?)\s+comments?\b/i)
-  if (!likesMatch || !commentsMatch) return null
-
-  const likes = parseInstagramCount(likesMatch[1], likesMatch[2])
-  const comments = parseInstagramCount(commentsMatch[1], commentsMatch[2])
-  return likes === null || comments === null ? null : likes + comments
-}
-
-async function getInstagramMetrics(browser, username) {
-  const page = await browser.newPage()
-  try {
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-    await page.goto(`https://www.instagram.com/${username}/`, {
-      waitUntil: 'domcontentloaded',
-      timeout: 15000,
-    })
-    const profile = await page.evaluate((profileUsername) => {
-      const description = document.querySelector('meta[property="og:description"]')?.content || ''
-      const posts = [...document.querySelectorAll('a[href]')].flatMap((anchor) => {
-        const url = new URL(anchor.href)
-        const [linkedUsername, type, shortcode] = url.pathname.split('/').filter(Boolean)
-        return url.hostname.endsWith('instagram.com')
-          && linkedUsername?.toLowerCase() === profileUsername.toLowerCase()
-          && ['p', 'reel', 'tv'].includes(type)
-          && shortcode
-          ? [`https://www.instagram.com/${linkedUsername}/${type}/${shortcode}/`]
+  const followers = Number.isFinite(profile.followersCount) ? profile.followersCount : null
+  const postEngagementRates = followers > 0
+    ? (Array.isArray(profile.latestPosts) ? profile.latestPosts : [])
+      .slice(0, 6)
+      .flatMap((post) => {
+        const likes = post.likesCount
+        const comments = post.commentsCount
+        return Number.isFinite(likes) && likes >= 0 && Number.isFinite(comments) && comments >= 0
+          ? [(likes + comments) / followers * 100]
           : []
       })
-      return { description, posts: [...new Set(posts)] }
-    }, username)
-    const followers = parseInstagramFollowerCount(profile.description)
-    const postEngagements = []
-
-    for (const postUrl of profile.posts.slice(0, 9)) {
-      try {
-        await page.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 15000 })
-        const description = await page.evaluate(() =>
-          document.querySelector('meta[property="og:description"]')?.content
-          || document.querySelector('meta[name="description"]')?.content
-          || '',
-        )
-        const engagement = parseInstagramPostEngagement(description)
-        if (engagement !== null) postEngagements.push(engagement)
-      } catch (error) {
-        console.error(`Instagram post metrics lookup failed for @${username}:`, error)
-      }
-    }
-
-    const postEngagementRates = postEngagements
-      .map((engagement) => engagement / followers * 100)
       .sort((first, second) => first - second)
-    const middleIndex = Math.floor(postEngagementRates.length / 2)
-    const engagementRate = followers && postEngagementRates.length
-      ? postEngagementRates.length % 2
-        ? postEngagementRates[middleIndex]
-        : (postEngagementRates[middleIndex - 1] + postEngagementRates[middleIndex]) / 2
-      : null
-    return { followers, engagementRate, engagementPostCount: postEngagements.length }
-  } finally {
-    await page.close()
+    : []
+  const middleIndex = Math.floor(postEngagementRates.length / 2)
+  const engagementRate = postEngagementRates.length
+    ? postEngagementRates.length % 2
+      ? postEngagementRates[middleIndex]
+      : (postEngagementRates[middleIndex - 1] + postEngagementRates[middleIndex]) / 2
+    : null
+
+  return {
+    followers,
+    engagementRate,
+    engagementPostCount: postEngagementRates.length,
   }
-}
-
-async function addInstagramMetrics(entities) {
-  const entityUsernames = entities.map((entity) => getInstagramUsername(
-    entity.external?.instagram_username || entity.external?.instagram,
-  ))
-  const usernames = [...new Set(entityUsernames.filter(Boolean))]
-  const metricsByUsername = new Map()
-
-  if (usernames.length > 0) {
-    let browser
-    try {
-      browser = await puppeteer.launch({ headless: true })
-      for (let index = 0; index < usernames.length; index += 5) {
-        const batch = usernames.slice(index, index + 5)
-        const results = await Promise.all(batch.map(async (username) => {
-          try {
-            return [username, await getInstagramMetrics(browser, username)]
-          } catch (error) {
-            console.error(`Instagram metrics lookup failed for @${username}:`, error)
-            return [username, { followers: null, engagementRate: null, engagementPostCount: 0 }]
-          }
-        }))
-        for (const [username, metrics] of results) metricsByUsername.set(username, metrics)
-      }
-    } catch (error) {
-      console.error('Could not launch browser for Instagram metrics lookups:', error)
-      for (const username of usernames) {
-        metricsByUsername.set(username, { followers: null, engagementRate: null, engagementPostCount: 0 })
-      }
-    } finally {
-      if (browser) await browser.close()
-    }
-  }
-
-  return entities.map((entity, index) => {
-    const username = entityUsernames[index]
-    return username ? {
-      ...entity,
-      instagramFollowers: metricsByUsername.get(username)?.followers ?? null,
-      instagramEngagementRate: metricsByUsername.get(username)?.engagementRate ?? null,
-      instagramEngagementPostCount: metricsByUsername.get(username)?.engagementPostCount ?? 0,
-    } : entity
-  })
 }
 
 app.post('/api/recommendations', async (request, response) => {
@@ -250,6 +152,29 @@ app.post('/api/recommendations', async (request, response) => {
     console.error('Qloo recommendation request failed:', error.message)
     const status = error.status >= 400 && error.status < 500 ? error.status : 502
     return response.status(status).json({ error: error.message || 'Could not retrieve brand recommendations.' })
+  }
+})
+
+app.post('/api/influencers/metrics', async (request, response) => {
+  const { usernames } = request.body || {}
+  if (
+    !Array.isArray(usernames)
+    || usernames.length !== 1
+    || usernames.some((username) => typeof username !== 'string' || !/^[A-Za-z0-9._]{1,30}$/.test(username))
+  ) {
+    return response.status(400).json({ error: 'Provide one valid Instagram username.' })
+  }
+
+  const token = process.env.APIFY_TOKEN
+  if (!token) return response.status(503).json({ error: 'Apify is not configured on this server.' })
+
+  const [username] = usernames
+  try {
+    const metrics = await getInstagramMetrics(username, token)
+    return response.json({ metrics: { [username]: metrics } })
+  } catch (error) {
+    console.error(`Apify Instagram metrics lookup failed for @${username}:`, error)
+    return response.status(502).json({ error: error.message || `Could not retrieve Instagram details for @${username}.` })
   }
 })
 
@@ -331,7 +256,7 @@ app.post('/api/influencers', async (request, response) => {
       }
     }
     return response.json({
-      entities: await addInstagramMetrics(entities),
+      entities,
       hasMore: sourceResults.some((source) => source.length === batchTake),
     })
   } catch (error) {
@@ -341,4 +266,8 @@ app.post('/api/influencers', async (request, response) => {
   }
 })
 
-app.listen(port, () => console.log(`Qloo API proxy listening on http://localhost:${port}`))
+export default app
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  app.listen(port, () => console.log(`Qloo API proxy listening on http://localhost:${port}`))
+}
