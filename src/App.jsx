@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowDownWideNarrow, ArrowLeft, ArrowUpRight, AtSign, Building2, Check, CircleAlert, Copy, MapPin, Search, Sparkles, Users } from 'lucide-react'
+import collaborationImage from './assets/brand-creator-match.png'
 import './App.css'
 
 const categories = ['Travel', 'Beauty', 'Fashion', 'Fitness', 'Food', 'Gaming', 'Lifestyle', 'Technology', 'Wellness']
@@ -31,7 +32,7 @@ const creatorTags = [
 const initialForm = {
   ageRange: '25_to_29', gender: 'male',
   description: 'I create travel vlogs and explore new destinations',
-  location: 'London', followers: 85000, category: 'Travel',
+  location: 'London', followers: 85000, category: 'Travel', pastBrandPartnerships: '',
 }
 const initialInfluencerForm = {
   product: '', location: 'London', ageRanges: ['30_to_34'], creatorTags: ['urn:tag:genre:person:influencer'], gender: 'any', popularityTier: 2,
@@ -61,7 +62,6 @@ const initialOutreachForm = {
   brandEmail: '',
   brandPhone: '',
 }
-
 function buildOutreachMessage(details) {
   const brandName = details.brandName.trim() || '[brand name]'
   const productName = details.productName.trim() || '[product name]'
@@ -127,7 +127,7 @@ function getOutreachHighlightTerms(details) {
   ].filter((term) => typeof term === 'string' && term.trim()).map((term) => term.trim())
 }
 
-function OutreachMessageEditor({ value, onChange, highlightTerms }) {
+function OutreachMessageEditor({ value, onChange, highlightTerms, id = 'outreach-message', className = '', highlightPlaceholders = false }) {
   const textareaRef = useRef(null)
   const escapedTerms = useMemo(
     () => [...new Set(highlightTerms)].sort((first, second) => second.length - first.length).map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
@@ -137,12 +137,12 @@ function OutreachMessageEditor({ value, onChange, highlightTerms }) {
     const matcher = new RegExp(`(\\[[^\\]\\n]+\\]${escapedTerms.length ? `|${escapedTerms.join('|')}` : ''})`, 'gi')
     return value.split(matcher).map((part, index) => (
       /^\[[^\]\n]+\]$/.test(part)
-        ? <span className="outreach-unfilled-value" key={`${part}-${index}`}>{part}</span>
+        ? <span className={highlightPlaceholders ? 'outreach-dynamic-value' : 'outreach-unfilled-value'} key={`${part}-${index}`}>{part}</span>
         : escapedTerms.some((term) => new RegExp(`^${term}$`, 'i').test(part))
         ? <span className="outreach-dynamic-value" key={`${part}-${index}`}>{part}</span>
         : part
     ))
-  }, [escapedTerms, value])
+  }, [escapedTerms, highlightPlaceholders, value])
 
   function syncScroll(event) {
     if (textareaRef.current) {
@@ -152,11 +152,11 @@ function OutreachMessageEditor({ value, onChange, highlightTerms }) {
   }
 
   return (
-    <div className="outreach-editor">
+    <div className={`outreach-editor ${className}`.trim()}>
       <div className="outreach-highlight-layer" aria-hidden="true">{highlightedMessage}{value.endsWith('\n') ? ' ' : ''}</div>
       <textarea
         ref={textareaRef}
-        id="outreach-message"
+        id={id}
         className="outreach-message"
         value={value}
         onChange={onChange}
@@ -183,6 +183,69 @@ function readOutreachInfluencers() {
   }
 }
 
+function readOutreachRole() {
+  try {
+    return sessionStorage.getItem('outreachRole') === 'influencer' ? 'influencer' : 'brand'
+  } catch (error) {
+    console.error('Could not restore the outreach path:', error)
+    return 'brand'
+  }
+}
+
+function getBrandContextValue(value, fallback) {
+  if (typeof value === 'string' && value.trim()) return value.trim()
+  if (Array.isArray(value)) {
+    const values = value.map((item) => typeof item === 'string' ? item : item?.value)
+      .filter((item) => typeof item === 'string' && item.trim())
+    if (values.length) return values.join(', ')
+  }
+  return fallback
+}
+
+function fillBrandOutreachTemplate(template, brand, productName, concept) {
+  const replacements = {
+    'Company Name': brand.name || 'Brand',
+    'Product Name': productName || 'your product',
+    'Reel Concept': concept,
+  }
+  return template.replace(/\[(Company Name|Product Name|Reel Concept)\]/g, (placeholder, key) => (
+    Object.hasOwn(replacements, key) ? replacements[key] : placeholder
+  )).replace(/ {2,}/g, ' ')
+}
+
+function buildBrandOutreachTemplate(details) {
+  const audienceLine = `I reach an audience of ${details.audienceSize} who love ${details.niche}.`
+  const demographicsLine = details.audienceDemographics
+    ? `\nMy audience is primarily ${details.audienceDemographics}.`
+    : ''
+  const viralReelLine = details.viralReel.trim()
+    ? `\nOne of my recent Reels worth mentioning: ${details.viralReel.trim()}.`
+    : ''
+
+  return `Hey [Company Name] team! ✨
+Massive fan of your [Product Name]! I’m a ${details.niche} creator and had a quick Reel concept in mind for your team:
+💡 Concept: [Reel Concept]
+${audienceLine}${demographicsLine}${viralReelLine}
+Please respond to this message if you're interested and we can discuss terms!`
+}
+
+function getAudienceDemographics(profile) {
+  const ageRangeLabels = {
+    '24_and_younger': 'under 25',
+    '25_to_29': '25–29',
+    '30_to_34': '30–34',
+    '35_to_44': '35–44',
+    '45_to_54': '45–54',
+    '55_and_older': '55 and older',
+  }
+  const genderLabel = profile.gender === 'female'
+    ? 'women'
+    : profile.gender === 'male' ? 'men' : 'people of all genders'
+  const ageLabel = ageRangeLabels[profile.ageRange] || 'all ages'
+  const location = profile.location.trim()
+  return `${genderLabel} aged ${ageLabel}${location ? ` in ${location}` : ''}`
+}
+
 async function getRecommendations(endpoint, request) {
   const response = await fetch(endpoint, {
     method: 'POST',
@@ -192,6 +255,21 @@ async function getRecommendations(endpoint, request) {
   const data = await response.json().catch(() => ({}))
   if (!response.ok) throw new Error(data.error || `Recommendation request failed (${response.status})`)
   return { entities: data.entities || [], hasMore: Boolean(data.hasMore) }
+}
+
+async function getReelConcept(brandContext, creatorProfile) {
+  const response = await fetch('/api/reel-concept', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ brandContext, creatorProfile }),
+  })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(data.error || `Reel concept request failed (${response.status})`)
+  if (typeof data.concept !== 'string' || !data.concept.trim()) {
+    throw new Error('The concept service returned an empty Reel idea.')
+  }
+  console.log('Reel concept generated:', data.concept.trim())
+  return data.concept.trim()
 }
 
 async function getInstagramActivity(username) {
@@ -207,7 +285,7 @@ async function getInstagramActivity(username) {
   return metrics
 }
 
-function BrandCard({ brand, index }) {
+function BrandCard({ brand, index, selected = false, onToggle }) {
   const [isFlipped, setIsFlipped] = useState(false)
   const name = brand.name || 'Untitled brand'
   const affinity = Number(brand.query?.affinity ?? 0)
@@ -236,7 +314,17 @@ function BrandCard({ brand, index }) {
   const detailsId = `brand-details-${brand.entity_id || index}`
 
   return (
-    <article className={`brand-card${isFlipped ? ' is-flipped' : ''}`} style={{ '--card-index': index }}>
+    <article className={`brand-card${isFlipped ? ' is-flipped' : ''}${onToggle ? ' is-selectable' : ''}${selected ? ' is-selected' : ''}`} style={{ '--card-index': index }}>
+      {onToggle && <div className="brand-selection-rail">
+        <label className="brand-selection-checkbox">
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={onToggle}
+            aria-label={`${selected ? 'Remove' : 'Add'} ${name} ${selected ? 'from' : 'to'} outreach list`}
+          />
+        </label>
+      </div>}
       <button
         className="brand-card-front"
         type="button"
@@ -284,6 +372,123 @@ function BrandCard({ brand, index }) {
         </aside>
       </section>
     </article>
+  )
+}
+
+function BrandOutreachCard({ brand, index, productName, conceptState, copied, onProductChange, onGenerate, onCopy }) {
+  const properties = brand.properties || {}
+  const imageUrl = properties.image?.url || brand.image?.url
+  const name = brand.name || 'Untitled brand'
+  const instagramUrl = getSocialUrl(brand.external?.instagram, 'instagram')
+  const instagramUsername = getInstagramUsername(brand)
+
+  return (
+    <article className="brand-outreach-card" style={{ '--card-index': index }}>
+      <header className="brand-outreach-heading">
+        <span className={`brand-mark mark-${index % 5}`}>
+          {imageUrl ? <img src={imageUrl} alt="" /> : <span>{name.slice(0, 1).toUpperCase()}</span>}
+        </span>
+        <div className="brand-outreach-name"><span className="brand-rank">BRAND PARTNERSHIP</span><h3>{name}</h3></div>
+        {!conceptState?.concept && <label className="field brand-outreach-product">
+          <span>Product you love</span>
+          <input value={productName} onChange={(event) => onProductChange(event.target.value)} placeholder="What product do you like?" />
+        </label>}
+      </header>
+      {conceptState?.status === 'error' && <p className="outreach-copy-error" role="alert">{conceptState.error}</p>}
+      <div className="brand-outreach-details">
+        <div className="brand-outreach-product-summary"><strong>Product</strong><span>{productName || 'Choose a product you like'}</span></div>
+        <div className="brand-outreach-concept">
+          <strong>Reel concept</strong>
+          {conceptState?.status === 'loading' && !conceptState.concept
+            ? <p role="status">Generating concept…</p>
+            : conceptState?.concept
+              ? <p>{conceptState.concept}</p>
+              : <p className="brand-outreach-concept-empty">Generate a concept to see it here.</p>}
+        </div>
+      </div>
+      <div className="brand-outreach-actions">
+        <button className="outreach-begin-button" type="button" onClick={onGenerate} disabled={conceptState?.status === 'loading'}>
+          {conceptState?.status === 'loading' ? 'Generating concept…' : conceptState?.concept ? 'Regenerate concept' : 'Generate Reel concept'}
+          <Sparkles size={15} />
+        </button>
+        {conceptState?.concept && <>
+          {instagramUrl && <a className="brand-outreach-instagram" href={instagramUrl} target="_blank" rel="noreferrer"><AtSign size={15} /> @{instagramUsername}</a>}
+          <button className="creator-copy-button brand-outreach-copy" type="button" onClick={onCopy}>
+            {copied ? <Check size={15} /> : <Copy size={15} />}<span>{copied ? 'Copied' : 'Copy message'}</span>
+          </button>
+        </>}
+      </div>
+    </article>
+  )
+}
+
+function BrandOutreachStudio({ brands, details, concepts, products, template, copiedKey, copyError, batchGenerating, batchProgress, onDetailChange, onProductChange, onTemplateChange, onGenerate, onGenerateAll, onCopy }) {
+  return (
+    <>
+      <section className="outreach-intro">
+        <div className="eyebrow"><span>02</span> THE CREATOR OUTREACH STUDIO</div>
+        <h1>Make it <em>personal.</em></h1>
+        <p>Generate a brand-specific Reel concept from Qloo insights and send a tailored partnership pitch.</p>
+      </section>
+      <div className="brand-outreach-workspace">
+        <section className="outreach-brief" aria-labelledby="creator-outreach-brief-title">
+          <div className="outreach-section-heading"><span className="section-kicker">01 / CREATOR PROFILE</span><h2 id="creator-outreach-brief-title">Your pitch details</h2></div>
+          <div className="outreach-form">
+            <label className="field"><span>Your niche</span><input name="niche" value={details.niche} onChange={onDetailChange} placeholder="e.g. Streetwear & Urban Style" /></label>
+            <label className="field"><span>Content style</span><textarea name="contentStyle" value={details.contentStyle} onChange={onDetailChange} rows="3" placeholder="e.g. Fast-cut B-roll with witty voiceover" /></label>
+            <label className="field"><span>Followers or monthly views</span><input name="audienceSize" value={details.audienceSize} onChange={onDetailChange} placeholder="e.g. 85K followers or 120K monthly views" /></label>
+            <label className="field"><span>Recent viral Reel worth mentioning</span><textarea name="viralReel" value={details.viralReel} onChange={onDetailChange} rows="2" placeholder="e.g. A thrift-flip Reel that reached 500K views" /></label>
+          </div>
+        </section>
+        <section className="brand-outreach-composer" aria-labelledby="brand-outreach-message-title">
+          <div className="outreach-section-heading"><span className="section-kicker">02 / MESSAGE TEMPLATE</span><h2 id="brand-outreach-message-title">Outreach message</h2></div>
+          <p className="outreach-helper">Edit this reusable message. Brand, product, and Reel concept placeholders are filled for each brand when copied.</p>
+          <label className="field brand-outreach-template-field" htmlFor="brand-outreach-template">
+            <span>Generalized message</span>
+          </label>
+          <OutreachMessageEditor
+            id="brand-outreach-template"
+            className="brand-outreach-template-editor"
+            value={template}
+            onChange={(event) => onTemplateChange(event.target.value)}
+            highlightTerms={[]}
+            highlightPlaceholders
+          />
+          <p className="outreach-token-note">Placeholders: <code>[Company Name]</code>, <code>[Product Name]</code>, <code>[Reel Concept]</code>. Creator and audience details are prefilled from your profile.</p>
+        </section>
+        <section className="brand-outreach-list" aria-labelledby="brand-outreach-list-title">
+          <div className="outreach-section-heading"><span className="section-kicker">03 / SELECTED BRANDS</span><h2 id="brand-outreach-list-title">Your shortlist <span>{brands.length}</span></h2></div>
+          {copyError && <p className="outreach-copy-error" role="alert">{copyError}</p>}
+          {brands.length
+            ? <div className="brand-outreach-cards">{brands.map((brand, index) => {
+              const key = getInfluencerKey(brand)
+              const productName = products[key] || ''
+              return <BrandOutreachCard
+                key={key || index}
+                brand={brand}
+                index={index}
+                productName={productName}
+                conceptState={concepts[key]}
+                copied={copiedKey === key}
+                onProductChange={(value) => onProductChange(brand, value)}
+                onGenerate={() => onGenerate(brand)}
+                onCopy={() => onCopy(brand)}
+              />
+            })}</div>
+            : <div className="outreach-empty"><Building2 size={20} /><p>No brands in your shortlist yet.</p><a href="#">Return to brand search</a></div>}
+          {brands.length > 0 && <button
+            className="outreach-begin-button brand-outreach-all-button"
+            type="button"
+            onClick={onGenerateAll}
+            disabled={batchGenerating}
+            aria-busy={batchGenerating}
+          >
+            {batchGenerating ? `Generating outreach ${batchProgress.completed}/${batchProgress.total}…` : 'Generate reel concept for all brands'}
+            <Sparkles size={16} />
+          </button>}
+        </section>
+      </div>
+    </>
   )
 }
 
@@ -426,10 +631,18 @@ function InfluencerCard({ person, index, selected = false, onToggle, selectable 
 function App() {
   const [isOutreachPage, setIsOutreachPage] = useState(() => window.location.hash === '#outreach')
   const [outreachInfluencers, setOutreachInfluencers] = useState(readOutreachInfluencers)
+  const [outreachRole, setOutreachRole] = useState(readOutreachRole)
   const [outreachDraft, setOutreachDraft] = useState(() => ({
     form: initialOutreachForm,
     message: buildOutreachMessage(initialOutreachForm),
   }))
+  const [reelDetails, setReelDetails] = useState({ niche: '', contentStyle: '', audienceSize: '', viralReel: '', audienceDemographics: '' })
+  const [reelConcepts, setReelConcepts] = useState({})
+  const [brandOutreachTemplate, setBrandOutreachTemplate] = useState('')
+  const [brandOutreachTemplateEdited, setBrandOutreachTemplateEdited] = useState(false)
+  const [brandProducts, setBrandProducts] = useState({})
+  const [batchGenerating, setBatchGenerating] = useState(false)
+  const [batchProgress, setBatchProgress] = useState({ completed: 0, total: 0 })
   const [copiedCreator, setCopiedCreator] = useState('')
   const [copyError, setCopyError] = useState('')
   const [selectedInfluencers, setSelectedInfluencers] = useState([])
@@ -446,6 +659,8 @@ function App() {
   const [creatorSort, setCreatorSort] = useState('affinity')
   const [countryFilter, setCountryFilter] = useState('')
   const [genderFilter, setGenderFilter] = useState('')
+  const [brandProductFilter, setBrandProductFilter] = useState('')
+  const [influencerAppealFilter, setInfluencerAppealFilter] = useState('')
   const [hasSearched, setHasSearched] = useState(false)
   const [loading, setLoading] = useState(false)
   const [loadingMessageIndex, setLoadingMessageIndex] = useState(0)
@@ -460,7 +675,10 @@ function App() {
   useEffect(() => {
     function updateOutreachRoute() {
       setIsOutreachPage(window.location.hash === '#outreach')
-      if (window.location.hash === '#outreach') setOutreachInfluencers(readOutreachInfluencers())
+      if (window.location.hash === '#outreach') {
+        setOutreachInfluencers(readOutreachInfluencers())
+        setOutreachRole(readOutreachRole())
+      }
     }
     window.addEventListener('hashchange', updateOutreachRoute)
     return () => window.removeEventListener('hashchange', updateOutreachRoute)
@@ -558,12 +776,141 @@ function App() {
   function beginOutreach() {
     try {
       sessionStorage.setItem('outreachInfluencers', JSON.stringify(selectedInfluencers))
+      sessionStorage.setItem('outreachRole', role)
       setOutreachInfluencers(selectedInfluencers)
+      setOutreachRole(role)
+      setReelConcepts({})
+      if (role === 'influencer') {
+        const nextReelDetails = {
+          niche: form.category,
+          contentStyle: form.description,
+          audienceSize: `${followerLabel} followers`,
+          viralReel: '',
+          audienceDemographics: getAudienceDemographics(form),
+        }
+        setBrandProducts(Object.fromEntries(selectedInfluencers.map((brand) => {
+          const properties = brand.properties || {}
+          const products = Array.isArray(properties.products_services)
+            ? properties.products_services
+            : Array.isArray(properties.products) ? properties.products : []
+          return [getInfluencerKey(brand), products[0] || '']
+        })))
+        setReelDetails(nextReelDetails)
+        setBrandOutreachTemplate(buildBrandOutreachTemplate(nextReelDetails))
+        setBrandOutreachTemplateEdited(false)
+      }
       setIsOutreachPage(true)
       window.location.hash = 'outreach'
     } catch (storageError) {
       console.error('Could not save selected influencers for outreach:', storageError)
       setError('Could not open the outreach page. Check that browser storage is available and try again.')
+    }
+  }
+
+  function updateReelDetail(event) {
+    const { name, value } = event.target
+    const updatedDetails = { ...reelDetails, [name]: value }
+    setReelDetails(updatedDetails)
+    if (!brandOutreachTemplateEdited) {
+      setBrandOutreachTemplate(buildBrandOutreachTemplate(updatedDetails))
+    }
+    setReelConcepts({})
+  }
+
+  function updateBrandOutreachTemplate(value) {
+    setBrandOutreachTemplate(value)
+    setBrandOutreachTemplateEdited(true)
+  }
+
+  function updateBrandProduct(brand, value) {
+    const key = getInfluencerKey(brand)
+    setBrandProducts((current) => ({ ...current, [key]: value }))
+    setReelConcepts((current) => ({ ...current, [key]: undefined }))
+  }
+
+  async function generateBrandConcept(brand) {
+    const key = getInfluencerKey(brand)
+    const properties = brand.properties || {}
+    const description = getShortDescription(properties.short_descriptions)
+      || properties.description || properties.short_description || ''
+    const products = Array.isArray(properties.products_services)
+      ? properties.products_services
+      : Array.isArray(properties.products) ? properties.products : []
+    const brandContext = {
+      brand_name: brand.name || 'Untitled brand',
+      target_audience: getBrandContextValue(properties.target_audience || properties.target_demographics_description || properties.audience_identity || properties.customer_segments, description || 'People interested in the brand’s products'),
+      emotional_tone: getBrandContextValue(properties.emotional_tone || properties.emotional_tones || properties.tone, 'Authentic and distinctive'),
+      aesthetics: getBrandContextValue(properties.aesthetics || properties.aesthetic_style || properties.visual_style, 'Distinctive and aligned with the brand identity'),
+      situational_contexts: getBrandContextValue(properties.situational_contexts || properties.best_situational_contexts, products.length ? `Using ${products.join(', ')}` : description || 'Everyday moments relevant to the creator’s audience'),
+      interest_adjacencies: getBrandContextValue(properties.interest_adjacencies || properties.key_interest_adjacencies || properties.customer_segments, description || 'Interests related to the brand’s products'),
+    }
+    const productName = brandProducts[key]?.trim()
+    const creatorProfile = {
+      niche: reelDetails.niche.trim() || form.category,
+      content_style: reelDetails.contentStyle.trim() || form.description,
+      audience_demographics: reelDetails.audienceDemographics,
+      recent_viral_reel: reelDetails.viralReel.trim(),
+      product_name: productName,
+    }
+
+    const previousConcept = reelConcepts[key]?.concept || ''
+    setReelConcepts((current) => ({ ...current, [key]: { status: 'loading', concept: previousConcept, error: '' } }))
+    try {
+      const concept = await getReelConcept(brandContext, creatorProfile)
+      setReelConcepts((current) => ({ ...current, [key]: { status: 'success', concept, error: '' } }))
+    } catch (requestError) {
+      console.error(`Could not generate a Reel concept for ${brand.name || 'this brand'}:`, requestError)
+      setReelConcepts((current) => ({
+        ...current,
+        [key]: { status: 'error', concept: previousConcept, error: requestError.message || 'Could not generate a Reel concept.' },
+      }))
+    }
+  }
+
+  async function generateAllBrandOutreach() {
+    if (batchGenerating || !outreachInfluencers.length) return
+
+    const concurrency = Math.min(3, outreachInfluencers.length)
+    let nextBrandIndex = 0
+    let completed = 0
+    setBatchGenerating(true)
+    setBatchProgress({ completed: 0, total: outreachInfluencers.length })
+
+    const worker = async () => {
+      while (nextBrandIndex < outreachInfluencers.length) {
+        const brand = outreachInfluencers[nextBrandIndex]
+        nextBrandIndex += 1
+        await generateBrandConcept(brand)
+        completed += 1
+        setBatchProgress({ completed, total: outreachInfluencers.length })
+      }
+    }
+
+    try {
+      await Promise.all(Array.from({ length: concurrency }, worker))
+    } finally {
+      setBatchGenerating(false)
+    }
+  }
+
+  async function copyBrandOutreachMessage(brand) {
+    const key = getInfluencerKey(brand)
+    const concept = reelConcepts[key]?.concept
+    if (!concept) return
+    const message = fillBrandOutreachTemplate(
+      brandOutreachTemplate,
+      brand,
+      brandProducts[key]?.trim(),
+      concept,
+    )
+    try {
+      await navigator.clipboard.writeText(message)
+      setCopiedCreator(key)
+      setCopyError('')
+      window.setTimeout(() => setCopiedCreator(''), 1800)
+    } catch (clipboardError) {
+      console.error('Could not copy brand outreach message:', clipboardError)
+      setCopyError('Could not copy the message. Check your browser clipboard permissions and try again.')
     }
   }
 
@@ -674,16 +1021,35 @@ function App() {
     setCreatorSort('affinity')
     setCountryFilter('')
     setGenderFilter('')
+    setBrandProductFilter('')
+    setInfluencerAppealFilter('')
   }
 
   const outreachForm = outreachDraft.form
   const outreachMessage = outreachDraft.message
   const outreachHighlightTerms = getOutreachHighlightTerms(outreachForm)
+  const brandOutreachDetails = {
+    niche: reelDetails.niche || form.category,
+    contentStyle: reelDetails.contentStyle || form.description,
+    audienceSize: reelDetails.audienceSize || `${followerLabel} followers`,
+    audienceDemographics: reelDetails.audienceDemographics,
+    viralReel: reelDetails.viralReel,
+  }
   const countries = [...new Set(brands.flatMap((person) => {
     const citizenship = person.properties?.citizenship
     return (Array.isArray(citizenship) ? citizenship : citizenship ? [citizenship] : [])
       .filter((country) => typeof country === 'string' && country.trim())
   }))].sort((a, b) => a.localeCompare(b))
+  const getBrandPropertyValues = (value) => (Array.isArray(value) ? value : value ? [value] : [])
+    .map((item) => typeof item === 'string' ? item.trim() : item?.value?.trim?.())
+    .filter((item) => typeof item === 'string' && item)
+  const productFilterOptions = [...new Set(brands.flatMap((brand) => {
+    const properties = brand.properties || {}
+    return getBrandPropertyValues(properties.products_services || properties.products)
+  }))].sort((first, second) => first.localeCompare(second))
+  const influencerAppealOptions = [...new Set(brands.flatMap((brand) => (
+    getBrandPropertyValues(brand.properties?.influencer_appeal)
+  )))].sort((first, second) => first.localeCompare(second))
   const filteredBrands = brands.filter((item) => {
     const properties = item.properties || {}
     const query = resultSearch.trim().toLocaleLowerCase()
@@ -692,12 +1058,32 @@ function App() {
       ? properties.citizenship
       : properties.citizenship ? [properties.citizenship] : []
     const genders = Array.isArray(properties.gender) ? properties.gender : properties.gender ? [properties.gender] : []
+    const products = getBrandPropertyValues(properties.products_services || properties.products)
+    const influencerAppeals = getBrandPropertyValues(properties.influencer_appeal)
+    const matchesValue = (values, filter) => !filter
+      || values.some((value) => value.toLocaleLowerCase().includes(filter.trim().toLocaleLowerCase()))
     return (!query || searchableText.includes(query))
       && (!countryFilter || citizenship.includes(countryFilter))
       && (!genderFilter || genders.some((gender) => typeof gender === 'string' && gender.toLowerCase() === genderFilter))
+      && matchesValue(products, brandProductFilter)
+      && matchesValue(influencerAppeals, influencerAppealFilter)
   }).sort((first, second) => {
     if (creatorSort === 'affinity') {
       return Number(second.query?.affinity ?? 0) - Number(first.query?.affinity ?? 0)
+    }
+    if (creatorSort === 'founded-asc' || creatorSort === 'founded-desc') {
+      const getFoundedYear = (item) => {
+        const year = Number(item.properties?.founded_year)
+        return Number.isInteger(year) && year > 0 ? year : null
+      }
+      const firstYear = getFoundedYear(first)
+      const secondYear = getFoundedYear(second)
+      if (firstYear === null || secondYear === null) {
+        if (firstYear !== secondYear) return firstYear === null ? 1 : -1
+        return Number(second.query?.affinity ?? 0) - Number(first.query?.affinity ?? 0)
+      }
+      const difference = creatorSort === 'founded-asc' ? firstYear - secondYear : secondYear - firstYear
+      return difference || Number(second.query?.affinity ?? 0) - Number(first.query?.affinity ?? 0)
     }
     const [metric, direction] = creatorSort.split('-')
     const value = (item) => metric === 'followers'
@@ -757,11 +1143,30 @@ function App() {
     return (
       <div className="app-shell">
         <header className="topbar">
-          <a className="wordmark" href="#top" aria-label="Signal home"><span className="wordmark-icon"><Sparkles size={16} /></span><span>signal<span className="wordmark-period">.</span></span></a>
+          <a className="wordmark" href="#top" aria-label="Matcha home"><span className="wordmark-icon"><Sparkles size={16} /></span><span>matcha</span></a>
           <div className="topbar-note"><span className="status-dot" /> CREATOR INTELLIGENCE <span className="topbar-divider">/</span> OUTREACH STUDIO</div>
           <a className="topbar-link" href="#"><ArrowLeft size={14} /> Back to shortlist</a>
         </header>
         <main className="outreach-page">
+          {outreachRole === 'influencer'
+            ? <BrandOutreachStudio
+              brands={outreachInfluencers}
+              details={brandOutreachDetails}
+              concepts={reelConcepts}
+              products={brandProducts}
+              template={brandOutreachTemplate}
+              copiedKey={copiedCreator}
+              copyError={copyError}
+              batchGenerating={batchGenerating}
+              batchProgress={batchProgress}
+              onDetailChange={updateReelDetail}
+              onProductChange={updateBrandProduct}
+              onTemplateChange={updateBrandOutreachTemplate}
+              onGenerate={generateBrandConcept}
+              onGenerateAll={generateAllBrandOutreach}
+              onCopy={copyBrandOutreachMessage}
+            />
+            : <>
           <section className="outreach-intro">
             <div className="eyebrow"><span>02</span> THE OUTREACH STUDIO</div>
             <h1>Make it <em>personal.</em></h1>
@@ -831,8 +1236,9 @@ function App() {
                 : <div className="outreach-empty"><Users size={20} /><p>No creators in your shortlist yet.</p><a href="#">Return to creator search</a></div>}
             </aside>
           </div>
+            </>}
         </main>
-        <footer className="site-footer"><span>© 2026 SIGNAL STUDIO</span><span>BUILT FOR THE NEXT GOOD COLLABORATION <span className="footer-star">✳</span></span></footer>
+        <footer className="site-footer"><span>© 2026 MATCHA</span><span>BUILT FOR THE NEXT GOOD COLLABORATION <span className="footer-star">✳</span></span></footer>
       </div>
     )
   }
@@ -840,7 +1246,7 @@ function App() {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <a className="wordmark" href="#top" aria-label="Signal home"><span className="wordmark-icon"><Sparkles size={16} /></span><span>signal<span className="wordmark-period">.</span></span></a>
+        <a className="wordmark" href="#top" aria-label="Matcha home"><span className="wordmark-icon"><Sparkles size={16} /></span><span>matcha</span></a>
         <div className="topbar-note"><span className="status-dot" /> CREATOR INTELLIGENCE <span className="topbar-divider">/</span> BRAND DISCOVERY</div>
         {role && <button className="topbar-link role-switch" type="button" onClick={() => chooseRole(null)}><ArrowLeft size={14} /> Change path</button>}
         {!role && <span className="topbar-link">AUDIENCE + CULTURE SIGNALS</span>}
@@ -848,7 +1254,7 @@ function App() {
       <main id="top" className="workspace">
         {!role ? (
           <>
-            <section className="intro"><div className="eyebrow"><span>01</span> THE COLLABORATION MATCHER</div><h1>Find your next<br /><em>great match.</em></h1><p>Tell us which side of the collaboration you’re on. We’ll find the right fit.</p><div className="intro-stamp" aria-hidden="true"><span>CREATOR</span><Sparkles size={19} /><span>× BRAND</span></div></section>
+            <section className="intro has-collaboration-image"><div className="eyebrow"><span>01</span> THE COLLABORATION MATCHER</div><h1>Find your next<br /><em>great match.</em></h1><p>Tell us which side of the collaboration you’re on. We’ll find the right fit.</p><img className="intro-collaboration-image" src={collaborationImage} alt="Example of a brand matched with a creator" /></section>
             <section className="role-picker" aria-labelledby="role-heading">
               <span className="section-kicker">LET’S GET STARTED</span>
               <h2 id="role-heading">Which best describes you?</h2>
@@ -856,12 +1262,12 @@ function App() {
               <div className="role-options">
                 <button className="role-card" type="button" onClick={() => chooseRole('influencer')}>
                   <span className="role-icon"><Users size={22} /></span>
-                  <span className="role-card-copy"><strong>Influencer looking for a brand</strong><small>Find brands that fit your audience and content.</small></span>
+                  <span className="role-card-copy"><strong><span>Influencer</span><small>looking for a brand</small></strong></span>
                   <ArrowUpRight size={18} />
                 </button>
                 <button className="role-card" type="button" onClick={() => chooseRole('brand')}>
                   <span className="role-icon"><Building2 size={22} /></span>
-                  <span className="role-card-copy"><strong>Brand looking for an influencer</strong><small>Discover creators aligned with your product and style.</small></span>
+                  <span className="role-card-copy"><strong><span>Brand</span><small>looking for an influencer</small></strong></span>
                   <ArrowUpRight size={18} />
                 </button>
               </div>
@@ -929,10 +1335,10 @@ function App() {
                 </fieldset>
               </> : <>
                 <fieldset className="field-group"><legend>Audience</legend><div className="field-pair">
-                  <label className="field"><span>Age range</span><select name="ageRange" value={form.ageRange} onChange={updateField}>{['24_and_younger', '25_to_29', '30_to_34', '35_to_44', '45_to_54', '55_and_older'].map((range) => <option key={range} value={range}>{range.replace('_to_', '–').replace('_plus', '+')}</option>)}</select></label>
+                  <label className="field"><span>Age range</span><select name="ageRange" value={form.ageRange} onChange={updateField}>{['24_and_younger', '25_to_29', '30_to_34', '35_to_44', '45_to_54', '55_and_older'].map((range) => <option key={range} value={range}>{range.replaceAll('_', ' ')}</option>)}</select></label>
                   <label className="field"><span>Gender</span><select name="gender" value={form.gender} onChange={updateField}><option value="female">Female</option><option value="male">Male</option><option value="any">Any</option></select></label>
                 </div><label className="field location-field"><span>Audience location</span><span className="input-with-icon"><MapPin size={16} /><input name="location" value={form.location} onChange={updateField} placeholder="City or region" required /></span></label></fieldset>
-                <fieldset className="field-group creator-group"><legend>Your content</legend><label className="field"><span>What do you make?</span><textarea name="description" value={form.description} onChange={updateField} placeholder="Describe your content and audience..." rows="3" required /></label><label className="field"><span>Content category</span><select name="category" value={form.category} onChange={updateField}>{categories.map((category) => <option key={category} value={category}>{category}</option>)}</select></label></fieldset>
+                <fieldset className="field-group creator-group"><legend>Your content</legend><label className="field"><span>What do you make?</span><textarea name="description" value={form.description} onChange={updateField} placeholder="Describe your content and audience..." rows="3" required /></label><label className="field"><span>Content category</span><select name="category" value={form.category} onChange={updateField}>{categories.map((category) => <option key={category} value={category}>{category}</option>)}</select></label><label className="field"><span>Past brand partnerships <small>(optional)</small></span><textarea name="pastBrandPartnerships" value={form.pastBrandPartnerships} onChange={updateField} placeholder="e.g. GoPro, Patagonia, Airbnb" rows="2" /><small>Enter brand names separated by commas or new lines.</small></label></fieldset>
                 <fieldset className="field-group follower-group"><legend>Audience size</legend><div className="follower-readout"><span className="follower-value"><Users size={17} /> {followerLabel}</span><span className="tier-label">{creatorTier}</span></div><input className="follower-slider" type="range" name="followers" min="1000" max="1000000" step="1000" value={form.followers} onChange={updateField} aria-label="Follower count" /><div className="range-labels"><span>1K</span><span>250K</span><span>500K</span><span>1M+</span></div></fieldset>
               </>}
               <button className="submit-button" type="submit" disabled={loading}>{loading ? <><span className="button-loading-bar" aria-hidden="true" /> Finding matches</> : <><Search size={17} /> Find {role === 'brand' ? 'influencers' : 'brand matches'} <ArrowUpRight size={16} /></>}</button>
@@ -947,6 +1353,11 @@ function App() {
                 <label className="result-filter"><span>Country</span><select value={countryFilter} onChange={(event) => { setCountryFilter(event.target.value); setResultPage(0) }}><option value="">All countries</option>{countries.map((country) => <option key={country} value={country}>{country}</option>)}</select></label>
                 <label className="result-filter"><span>Gender</span><select value={genderFilter} onChange={(event) => { setGenderFilter(event.target.value); setResultPage(0) }}><option value="">Any gender</option><option value="female">Female</option><option value="male">Male</option><option value="non-binary">Non-binary</option></select></label>
                 <label className="result-filter"><span>Sort by</span><select value={creatorSort} onChange={(event) => { setCreatorSort(event.target.value); setResultPage(0) }}><option value="affinity">Affinity</option><option value="followers-desc">Followers: high to low</option><option value="followers-asc">Followers: low to high</option><option value="engagement-desc">Engagement: high to low</option><option value="engagement-asc">Engagement: low to high</option></select></label>
+              </>}
+              {role === 'influencer' && <>
+                <label className="result-filter"><span>Product</span><span className="input-with-icon"><Search size={15} /><input type="search" list="brand-product-options" value={brandProductFilter} onChange={(event) => { setBrandProductFilter(event.target.value); setResultPage(0) }} placeholder="Search products" /></span><datalist id="brand-product-options">{productFilterOptions.map((product) => <option key={product} value={product} />)}</datalist></label>
+                <label className="result-filter"><span>Influencer appeal</span><span className="input-with-icon"><Search size={15} /><input type="search" list="brand-influencer-appeal-options" value={influencerAppealFilter} onChange={(event) => { setInfluencerAppealFilter(event.target.value); setResultPage(0) }} placeholder="Search appeals" /></span><datalist id="brand-influencer-appeal-options">{influencerAppealOptions.map((appeal) => <option key={appeal} value={appeal} />)}</datalist></label>
+                <label className="result-filter"><span>Sort by</span><select value={creatorSort} onChange={(event) => { setCreatorSort(event.target.value); setResultPage(0) }}><option value="affinity">Affinity</option><option value="founded-desc">Established: newest first</option><option value="founded-asc">Established: oldest first</option></select></label>
               </>}
             </div>}
             {loading ? <div className="state-panel loading-state">
@@ -966,7 +1377,13 @@ function App() {
                       activityError={instagramActivityStatuses[getInstagramUsername(brand)]?.error}
                       onFetchActivity={fetchInstagramDetails}
                     />
-                    : <BrandCard key={brand.entity_id || brand.id || `${brand.name}-${index}`} brand={brand} index={index} />)}</div>
+                    : <BrandCard
+                      key={brand.entity_id || brand.id || `${brand.name}-${index}`}
+                      brand={brand}
+                      index={index}
+                      selected={selectedInfluencers.some((selected) => getInfluencerKey(selected) === getInfluencerKey(brand))}
+                      onToggle={() => toggleInfluencerSelection(brand)}
+                    />)}</div>
                     : <div className="results-empty"><div className="orbit-art" aria-hidden="true"><span className="orbit orbit-one" /><span className="orbit orbit-two" /><span className="orbit-core"><Sparkles size={23} /></span><span className="orbit-node node-one" /><span className="orbit-node node-two" /><span className="orbit-node node-three" /></div><span className="empty-overline">A BETTER KIND OF COLLABORATION</span><h3>Good partnerships<br />feel <em>inevitable.</em></h3><p>{role === 'brand' ? 'Add your product, creator style, and target audience to find people who match.' : 'Set your creator signals and we’ll surface brands with an audience affinity to match.'}</p><div className="signal-tags"><span><Users size={13} /> Audience</span><span><Building2 size={13} /> {role === 'brand' ? 'Creator fit' : 'Brand fit'}</span><span><MapPin size={13} /> Place</span></div></div>}
             {hasSearched && (filteredBrands.length > 0 || hasMoreResults) && <div className="results-pagination">
               <span>Page {visiblePage + 1} of {pageCount}{loadingMore ? ' · Loading more results…' : ''}</span>
@@ -975,16 +1392,16 @@ function App() {
             {hasSearched && filteredBrands.length > 0 && <p className="results-footnote">Affinity scores reflect audience alignment, not a guarantee of partnership.</p>}
           </section>
         </div>
-        {role === 'brand' && selectedInfluencers.length > 0 && <aside className="outreach-cart" aria-label="Selected influencers">
+        {selectedInfluencers.length > 0 && <aside className="outreach-cart" aria-label={role === 'brand' ? 'Selected influencers' : 'Selected brands'}>
           <div className="outreach-cart-heading">
-            <div><span className="section-kicker">OUTREACH LIST</span><h2>Selected creators</h2></div>
+            <div><span className="section-kicker">OUTREACH LIST</span><h2>Selected {role === 'brand' ? 'creators' : 'brands'}</h2></div>
             <span className="outreach-cart-count">{selectedInfluencers.length}</span>
           </div>
           <ul className="outreach-cart-list">
             {selectedInfluencers.map((person) => (
               <li key={getInfluencerKey(person)}>
-                <span>{person.name || 'Unknown creator'}</span>
-                <button type="button" onClick={() => removeSelectedInfluencer(person)} aria-label={`Remove ${person.name || 'creator'} from outreach list`}>Remove</button>
+                <span>{person.name || (role === 'brand' ? 'Unknown creator' : 'Unknown brand')}</span>
+                <button type="button" onClick={() => removeSelectedInfluencer(person)} aria-label={`Remove ${person.name || (role === 'brand' ? 'creator' : 'brand')} from outreach list`}>Remove</button>
               </li>
             ))}
           </ul>
@@ -992,7 +1409,7 @@ function App() {
         </aside>}
         </>}
       </main>
-      <footer className="site-footer"><span>© 2026 SIGNAL STUDIO</span><span>BUILT FOR THE NEXT GOOD COLLABORATION <span className="footer-star">✳</span></span></footer>
+      <footer className="site-footer"><span>© 2026 MATCHA</span><span>BUILT FOR THE NEXT GOOD COLLABORATION <span className="footer-star">✳</span></span></footer>
     </div>
   )
 }

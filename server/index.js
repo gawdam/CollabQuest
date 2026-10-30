@@ -36,6 +36,106 @@ const supportedCreatorTags = new Set([
 app.use(express.json({ limit: '20kb' }))
 app.get('/api/health', (request, response) => response.json({ status: 'ok' }))
 
+app.post('/api/reel-concept', async (request, response) => {
+  const { brandContext, creatorProfile } = request.body || {}
+  const requiredBrandFields = [
+    'brand_name',
+    'target_audience',
+    'emotional_tone',
+    'aesthetics',
+    'situational_contexts',
+    'interest_adjacencies',
+  ]
+  const isValidText = (value, maxLength) => typeof value === 'string'
+    && value.trim().length > 0
+    && value.length <= maxLength
+  if (
+    !brandContext || typeof brandContext !== 'object'
+    || requiredBrandFields.some((field) => !isValidText(brandContext[field], 1000))
+    || !creatorProfile || typeof creatorProfile !== 'object'
+    || !isValidText(creatorProfile.niche, 200)
+    || !isValidText(creatorProfile.content_style, 500)
+    || (creatorProfile.audience_demographics !== undefined && !isValidText(creatorProfile.audience_demographics, 300))
+    || (creatorProfile.recent_viral_reel !== undefined && creatorProfile.recent_viral_reel !== '' && !isValidText(creatorProfile.recent_viral_reel, 500))
+    || (creatorProfile.product_name !== undefined && creatorProfile.product_name !== '' && !isValidText(creatorProfile.product_name, 300))
+  ) {
+    return response.status(400).json({ error: 'Provide complete brand intelligence and creator profile details.' })
+  }
+
+  const apiKey = process.env.GEMINI_API_KEY
+  if (!apiKey) return response.status(503).json({ error: 'Gemini is not configured on this server.' })
+
+  const prompt = `# ROLE
+You are a Social Media Strategist creating quick-pitch concepts for brand partnerships.
+
+# BRAND INTELLIGENCE (FROM QLOO)
+- Brand Name: ${brandContext.brand_name.trim()}
+- Target Audience: ${brandContext.target_audience.trim()}
+- Emotional Tone: ${brandContext.emotional_tone.trim()}
+- Aesthetic Style: ${brandContext.aesthetics.trim()}
+- Best Situational Contexts: ${brandContext.situational_contexts.trim()}
+- Key Interest Adjacencies: ${brandContext.interest_adjacencies.trim()}
+
+# CREATOR PROFILE
+- Niche: ${creatorProfile.niche.trim()}
+- Content Style: ${creatorProfile.content_style.trim()}
+- Audience Demographics: ${creatorProfile.audience_demographics?.trim() || 'Not specified'}
+- Product the Creator Likes: ${creatorProfile.product_name?.trim() || 'Choose a relevant brand product'}
+${creatorProfile.recent_viral_reel?.trim() ? `- Recent Viral Reel Worth Mentioning: ${creatorProfile.recent_viral_reel.trim()}` : ''}
+
+---
+
+# TASK
+Create a detailed, practical Reel concept based on the brand's Qloo insights and this creator's profile. Feature the specific product the creator likes, and make the idea feel authentic to the brand's audience, emotional tone, aesthetic, interests, and situational contexts.
+
+# OUTPUT FORMAT
+Write a single line explaining the concept in a way that could be used as a pitch to the brand. Include the product or brand name in the reel concept.
+
+Output only the concept, with no title, preamble, or labels. Make it specific enough to film; do not stop mid-sentence. Do not use em-dashes "—".`
+
+  try {
+    const geminiResponse = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey,
+      },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          thinkingConfig: { thinkingLevel: 'low' },
+          maxOutputTokens: 700,
+        },
+      }),
+      signal: AbortSignal.timeout(20000),
+    })
+    const data = await geminiResponse.json().catch(() => ({}))
+    if (!geminiResponse.ok) {
+      const error = new Error(data.error?.message || `Gemini request failed (${geminiResponse.status})`)
+      error.status = geminiResponse.status
+      throw error
+    }
+
+    const concept = data.candidates?.[0]?.content?.parts
+      ?.map((part) => part.text || '')
+      .join('')
+      .trim()
+      .replace(/^["']|["']$/g, '')
+    if (data.candidates?.[0]?.finishReason === 'MAX_TOKENS') {
+      throw new Error('Gemini reached the concept output limit. Please try again.')
+    }
+    if (!concept) throw new Error('Gemini returned no Reel concept.')
+
+    return response.json({ concept })
+  } catch (error) {
+    console.error('Gemini Reel concept request failed:', error.message)
+    if (error.name === 'TimeoutError' || error.name === 'AbortError') {
+      return response.status(504).json({ error: 'Reel concept generation timed out. Please try again.' })
+    }
+    return response.status(502).json({ error: 'Could not generate a Reel concept. Please try again.' })
+  }
+})
+
 function getPopularityRange(followerCount) {
   if (followerCount < 10000) return [0, 0.2]
   if (followerCount < 50000) return [0.2, 0.4]
@@ -107,11 +207,17 @@ async function getInstagramMetrics(username, token) {
 }
 
 app.post('/api/recommendations', async (request, response) => {
-  const { ageRange, gender, description, location, followers, category, page = 1 } = request.body || {}
+  const {
+    ageRange, gender, description, location, followers, category,
+    pastBrandPartnerships = '', page = 1,
+  } = request.body || {}
   const followerCount = Number(followers)
   const resultPage = Number(page)
   if (!ageRange || !description?.trim() || !location?.trim() || !Number.isFinite(followerCount)) {
     return response.status(400).json({ error: 'Add a content description, location, age range, and follower count.' })
+  }
+  if (typeof pastBrandPartnerships !== 'string' || pastBrandPartnerships.length > 2000) {
+    return response.status(400).json({ error: 'Past brand partnerships must be a text list under 2,000 characters.' })
   }
   if (!Number.isInteger(resultPage) || resultPage < 1) {
     return response.status(400).json({ error: 'Page must be a positive integer.' })
@@ -124,6 +230,14 @@ app.post('/api/recommendations', async (request, response) => {
   if (!apiKey) return response.status(503).json({ error: 'Qloo is not configured on this server.' })
 
   try {
+    const partnershipNames = [...new Set(pastBrandPartnerships
+      .split(/[,\n\r]+/)
+      .map((name) => name.trim())
+      .filter(Boolean))]
+    if (partnershipNames.length > 10 || partnershipNames.some((name) => name.length > 100)) {
+      return response.status(400).json({ error: 'Enter up to 10 past brand names, each no longer than 100 characters.' })
+    }
+
     const tagParams = new URLSearchParams({
       'feature.typo_tolerance': 'true',
       'filter.query': `${category || ''} ${description}`.trim(),
@@ -131,7 +245,19 @@ app.post('/api/recommendations', async (request, response) => {
     })
     const tagData = await qlooGet('tags', tagParams, apiKey)
     const tagUrns = (tagData.results?.tags || []).map((tag) => tag.id).filter(Boolean)
-    if (!tagUrns.length) return response.json({ entities: [] })
+
+    const brandEntities = await Promise.all(partnershipNames.map(async (brandName) => {
+      const searchParams = new URLSearchParams({
+        query: brandName,
+        'filter.type': 'urn:entity:brand',
+        take: '1',
+      })
+      const searchData = await qlooGet('search', searchParams, apiKey)
+      const match = searchData.results?.entities?.[0] || searchData.results?.[0]
+      return match?.id || match?.entity_id || null
+    }))
+    const brandEntityIds = [...new Set(brandEntities.filter(Boolean))]
+    if (!tagUrns.length && !brandEntityIds.length) return response.json({ entities: [] })
 
     const [popularityMin, popularityMax] = getPopularityRange(followerCount)
     const insightParams = new URLSearchParams({
@@ -145,6 +271,7 @@ app.post('/api/recommendations', async (request, response) => {
       take: '50',
     })
     if (gender && gender !== 'any') insightParams.set('signal.demographics.gender', gender)
+    if (brandEntityIds.length) insightParams.set('signal.interests.entities', brandEntityIds.join(','))
 
     const insightData = await qlooGet('insights/', insightParams, apiKey)
     return response.json({ entities: insightData.results?.entities || [] })
