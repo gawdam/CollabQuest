@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowDownWideNarrow, ArrowLeft, ArrowUpRight, AtSign, Building2, Check, CircleAlert, Copy, MapPin, Search, Sparkles, Users } from 'lucide-react'
+import { Analytics } from '@vercel/analytics/react'
 import collaborationImage from './assets/brand-creator-match.png'
 import './App.css'
 
@@ -1239,6 +1240,7 @@ function App() {
             </>}
         </main>
         <footer className="site-footer"><span>© 2026 MATCHA</span><span>BUILT FOR THE NEXT GOOD COLLABORATION <span className="footer-star">✳</span></span></footer>
+        <Analytics />
       </div>
     )
   }
@@ -1410,6 +1412,7 @@ function App() {
         </>}
       </main>
       <footer className="site-footer"><span>© 2026 MATCHA</span><span>BUILT FOR THE NEXT GOOD COLLABORATION <span className="footer-star">✳</span></span></footer>
+      <Analytics />
     </div>
   )
 }
