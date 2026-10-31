@@ -40,9 +40,9 @@ the server.
 ## Deploy to Vercel
 
 The app is configured for Vercel: Vite builds the frontend into `dist`, and
-the Express API is exposed as a Node.js Function under `/api`. The function
-allows up to 300 seconds for Apify's Instagram actor; your Vercel plan must
-support that configured maximum.
+each file under `api/` exposes the corresponding Express API route as a Node.js
+Function. The Instagram metrics function allows up to 300 seconds for Apify's
+actor; your Vercel plan must support that configured maximum.
 
 1. Import this repository into [Vercel](https://vercel.com/new), or install the
    Vercel CLI and run `vercel` from the repository root.
